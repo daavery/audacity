@@ -21,7 +21,6 @@
 
 EffectSilence::EffectSilence()
 {
-   mDuration = GetDuration();
 }
 
 EffectSilence::~EffectSilence()
@@ -37,7 +36,7 @@ wxString EffectSilence::GetSymbol()
 
 wxString EffectSilence::GetDescription()
 {
-   return wxTRANSLATE("Creates audio of zero amplitude");
+   return XO("Creates audio of zero amplitude");
 }
 
 // EffectIdentInterface implementation

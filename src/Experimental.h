@@ -108,9 +108,6 @@
 #define EXPERIMENTAL_SPECTRAL_EDITING
 
 // Paul Licameli (PRL) 29 Nov 2014
-// #define EXPERIMENTAL_SCRUBBING
-
-// Paul Licameli (PRL) 29 Nov 2014
 // #define EXPERIMENTAL_IMPROVED_SEEKING
 
 // Philip Van Baren 01 July 2009
@@ -168,5 +165,24 @@
 
 // Define to enable Nyquist audio clip boundary control (Steve Daulton Dec 2014)
 // #define EXPERIMENTAL_NYQUIST_SPLIT_CONTROL
+
+// Paul Licameli (PRL) 16 Apr 2015
+//Support for scrubbing in the AudioIO engine, without calls to it
+#define EXPERIMENTAL_SCRUBBING_SUPPORT
+   
+// The following enable parts of the scrubbing user interface.
+// You must define EXPERIMENTAL_SCRUBBING_SUPPORT if you enable this:
+#define EXPERIMENTAL_SCRUBBING_BASIC
+// You must define EXPERIMENTAL_SCRUBBING_BASIC if you enable this:
+#define EXPERIMENTAL_SCRUBBING_SMOOTH_SCROLL
+// You must define EXPERIMENTAL_SCRUBBING_BASIC if you enable this:
+#define EXPERIMENTAL_SCRUBBING_SCROLL_WHEEL
+
+
+// Define to include crash reporting
+#define EXPERIMENTAL_CRASH_REPORT
+#if !defined(wxUSE_DEBUGREPORT) || !wxUSE_DEBUGREPORT
+#undef EXPERIMENTAL_CRASH_REPORT
+#endif
 
 #endif

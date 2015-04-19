@@ -36,6 +36,7 @@ simplifies construction of menu items.
 #include <limits>
 #include <math.h>
 
+
 #include <wx/defs.h>
 #include <wx/docview.h>
 #include <wx/msgdlg.h>
@@ -116,6 +117,10 @@ simplifies construction of menu items.
 
 #include "CaptureEvents.h"
 #include "Snap.h"
+
+#if defined(EXPERIMENTAL_CRASH_REPORT)
+#include <wx/debugrpt.h>
+#endif
 
 #ifdef EXPERIMENTAL_SCOREALIGN
 #include "effects/ScoreAlignDialog.h"
@@ -1060,6 +1065,10 @@ void AudacityProject::CreateMenusAndCommands()
               AudioIONotBusyFlag);
 
    c->AddItem(wxT("Log"), _("Show &Log..."), FN(OnShowLog));
+
+#if defined(EXPERIMENTAL_CRASH_REPORT)
+   c->AddItem(wxT("CrashReport"), _("&Generate Support Data..."), FN(OnCrashReport));
+#endif
 
 #ifndef __WXMAC__
    c->AddSeparator();
@@ -2013,7 +2022,8 @@ void AudacityProject::OnPlayOneSecond()
 
    double pos = mTrackPanel->GetMostRecentXPos();
    mLastPlayMode = oneSecondPlay;
-   GetControlToolBar()->PlayPlayRegion(pos - 0.5, pos + 0.5);
+   GetControlToolBar()->PlayPlayRegion
+      (SelectedRegion(pos - 0.5, pos + 0.5), GetDefaultPlayOptions());
 }
 
 
@@ -2056,7 +2066,8 @@ void AudacityProject::OnPlayToSelection()
    // only when playing a short region, less than or equal to a second.
 //   mLastPlayMode = ((t1-t0) > 1.0) ? normalPlay : oneSecondPlay;
 
-   GetControlToolBar()->PlayPlayRegion(t0, t1);
+   GetControlToolBar()->PlayPlayRegion
+      (SelectedRegion(t0, t1), GetDefaultPlayOptions());
 }
 
 // The next 4 functions provide a limited version of the
@@ -2073,7 +2084,7 @@ void AudacityProject::OnPlayBeforeSelectionStart()
 
    mLastPlayMode = oneSecondPlay;      // this disables auto scrolling, as in OnPlayToSelection()
 
-   GetControlToolBar()->PlayPlayRegion(t0 - beforeLen, t0);
+   GetControlToolBar()->PlayPlayRegion(SelectedRegion(t0 - beforeLen, t0), GetDefaultPlayOptions());
 }
 
 void AudacityProject::OnPlayAfterSelectionStart()
@@ -2089,9 +2100,9 @@ void AudacityProject::OnPlayAfterSelectionStart()
    mLastPlayMode = oneSecondPlay;      // this disables auto scrolling, as in OnPlayToSelection()
 
    if ( t1 - t0 > 0.0 && t1 - t0 < afterLen )
-      GetControlToolBar()->PlayPlayRegion(t0, t1);
+      GetControlToolBar()->PlayPlayRegion(SelectedRegion(t0, t1), GetDefaultPlayOptions());
    else
-      GetControlToolBar()->PlayPlayRegion(t0, t0 + afterLen);
+      GetControlToolBar()->PlayPlayRegion(SelectedRegion(t0, t0 + afterLen), GetDefaultPlayOptions());
 }
 
 void AudacityProject::OnPlayBeforeSelectionEnd()
@@ -2107,9 +2118,9 @@ void AudacityProject::OnPlayBeforeSelectionEnd()
    mLastPlayMode = oneSecondPlay;      // this disables auto scrolling, as in OnPlayToSelection()
 
    if ( t1 - t0 > 0.0 && t1 - t0 < beforeLen )
-      GetControlToolBar()->PlayPlayRegion(t0, t1);
+      GetControlToolBar()->PlayPlayRegion(SelectedRegion(t0, t1), GetDefaultPlayOptions());
    else
-      GetControlToolBar()->PlayPlayRegion(t1 - beforeLen, t1);
+      GetControlToolBar()->PlayPlayRegion(SelectedRegion(t1 - beforeLen, t1), GetDefaultPlayOptions());
 }
 
 
@@ -2124,7 +2135,7 @@ void AudacityProject::OnPlayAfterSelectionEnd()
 
    mLastPlayMode = oneSecondPlay;      // this disables auto scrolling, as in OnPlayToSelection()
 
-   GetControlToolBar()->PlayPlayRegion(t1, t1 + afterLen);
+   GetControlToolBar()->PlayPlayRegion(SelectedRegion(t1, t1 + afterLen), GetDefaultPlayOptions());
 }
 
 void AudacityProject::OnPlayLooped()
@@ -4931,6 +4942,7 @@ void AudacityProject::OnHistory()
       mHistoryWindow = new HistoryWindow(this, &mUndoManager);
    mHistoryWindow->Show();
    mHistoryWindow->Raise();
+   mHistoryWindow->UpdateDisplay();
 }
 
 void AudacityProject::OnKaraoke()
@@ -6172,6 +6184,18 @@ void AudacityProject::OnBenchmark()
 {
    ::RunBenchmark(this);
 }
+
+#if defined(EXPERIMENTAL_CRASH_REPORT)
+void AudacityProject::OnCrashReport()
+{
+// Change to "1" to test a real crash
+#if 0
+   char *p = 0;
+   *p = 1234;
+#endif
+   wxGetApp().GenerateCrashReport(wxDebugReport::Context_Current);
+}
+#endif
 
 void AudacityProject::OnScreenshot()
 {

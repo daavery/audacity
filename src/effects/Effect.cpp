@@ -961,9 +961,7 @@ bool Effect::DoEffect(wxWindow *parent,
                       SelectedRegion *selectedRegion,
                       bool shouldPrompt /* = true */)
 {
-   double t0 = selectedRegion->t0();
-   double t1 = selectedRegion->t1();
-   wxASSERT(t0 <= t1);
+   wxASSERT(selectedRegion->duration() >= 0.0);
 
    if (mOutputTracks)
    {
@@ -975,8 +973,9 @@ bool Effect::DoEffect(wxWindow *parent,
    mProjectRate = projectRate;
    mParent = parent;
    mTracks = list;
-   mT0 = t0;
-   mT1 = t1;
+   mT0 = selectedRegion->t0();
+   mT1 = selectedRegion->t1();
+   mDuration = GetDuration();
 #ifdef EXPERIMENTAL_SPECTRAL_EDITING
    mF0 = selectedRegion->f0();
    mF1 = selectedRegion->f1();
@@ -2265,7 +2264,7 @@ void Effect::Preview(bool dryOnly)
 #ifdef EXPERIMENTAL_MIDI_OUT
                                empty,
 #endif
-                               NULL, rate, t0, t1, NULL);
+                               rate, t0, t1);
 
       if (token) {
          int previewing = eProgressSuccess;
@@ -2959,7 +2958,9 @@ void EffectUIHost::OnPlay(wxCommandEvent & WXUNUSED(evt))
          mPlayPos = mRegion.t1();
       }
 
-      mProject->GetControlToolBar()->PlayPlayRegion(mPlayPos, mRegion.t1());
+      mProject->GetControlToolBar()->PlayPlayRegion
+         (SelectedRegion(mPlayPos, mRegion.t1()),
+          mProject->GetDefaultPlayOptions());
    }
 }
 

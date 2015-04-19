@@ -122,6 +122,8 @@ audacity_SOURCES = \
 	DeviceChange.h \
 	DeviceManager.cpp \
 	DeviceManager.h \
+	Diags.cpp \
+	Diags.h \
 	Envelope.cpp \
 	Envelope.h \
 	Experimental.h \
@@ -231,6 +233,7 @@ audacity_SOURCES = \
 	TrackPanelAx.h \
 	UndoManager.cpp \
 	UndoManager.h \
+	ViewInfo.cpp \
 	ViewInfo.h \
 	VoiceKey.cpp \
 	VoiceKey.h \

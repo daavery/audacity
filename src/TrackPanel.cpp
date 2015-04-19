@@ -217,6 +217,7 @@ is time to refresh some aspect of the screen.
 #include "toolbars/ControlToolBar.h"
 #include "toolbars/ToolManager.h"
 #include "toolbars/ToolsToolBar.h"
+#include "toolbars/TranscriptionToolBar.h"
 
 #include "widgets/ASlider.h"
 #include "widgets/Ruler.h"
@@ -232,9 +233,23 @@ WX_DEFINE_OBJARRAY(TrackClipArray);
 #include "../images/Cursors.h"
 #include <iostream>
 
-#define kLeftInset 4
-#define kTopInset 4
-#define kTimerInterval 50 // milliseconds
+enum {
+   kLeftInset = 4,
+   kTopInset = 4,
+   kTimerInterval = 50, // milliseconds
+   kOneSecondCountdown = 1000 / kTimerInterval,
+};
+
+enum {
+   // PRL:
+   // Mouse must move at least this far to distinguish ctrl-drag to scrub
+   // from ctrl-click for playback.
+   SCRUBBING_PIXEL_TOLERANCE = 10,
+
+#ifdef EXPERIMENTAL_SCRUBBING_SCROLL_WHEEL
+   ScrubSpeedStepsPerOctave = 4,
+#endif
+};
 
 // Is the distance between A and B less than D?
 template < class A, class B, class DIST > bool within(A a, B b, DIST d)
@@ -564,6 +579,7 @@ TrackPanel::TrackPanel(wxWindow * parent, wxWindowID id,
 
    mLastCursor = -1;
    mLastIndicator = -1;
+   mOldQPIndicatorPos = -1;
 
    // Register for tracklist updates
    mTracks->Connect(EVT_TRACKLIST_RESIZED,
@@ -585,10 +601,20 @@ TrackPanel::TrackPanel(wxWindow * parent, wxWindowID id,
    mSelStartValid = false;
    mSelStart = 0;
 
-#ifdef EXPERIMENTAL_SCRUBBING
-   mScrubbing = false;
-   mLastScrubTime = 0;
-   mLastScrubPosition = 0;
+#ifdef EXPERIMENTAL_SCRUBBING_BASIC
+   mScrubToken = -1;
+   mScrubStartClockTimeMillis = -1;
+   mScrubStartPosition = 0;
+   mMaxScrubSpeed = 1.0;
+   mScrubSpeedDisplayCountdown = 0;
+#endif
+
+#ifdef EXPERIMENTAL_SCRUBBING_SMOOTH_SCROLL
+   mSmoothScrollingScrub = false;
+#endif
+
+#ifdef EXPERIMENTAL_SCRUBBING_SCROLL_WHEEL
+   mLogMaxScrubSpeed = 0;
 #endif
 
    mInitialTrackSelection = new std::vector<bool>;
@@ -979,7 +1005,7 @@ void TrackPanel::OnTimer()
    AudacityProject *p = GetProject();
 
    if ((p->GetAudioIOToken() > 0) &&
-         gAudioIO->IsStreamActive(p->GetAudioIOToken()))
+      gAudioIO->IsStreamActive(p->GetAudioIOToken()))
    {
       // Update lyrics display.
       LyricsWindow* pLyricsWindow = p->GetLyricsWindow();
@@ -997,34 +1023,37 @@ void TrackPanel::OnTimer()
    //    audacityAudioCallback where it calls gAudioIO->mOutputMeter->UpdateDisplay().
    MixerBoard* pMixerBoard = this->GetMixerBoard();
    if (pMixerBoard &&
-         (p->GetAudioIOToken() > 0) &&
-         gAudioIO->IsStreamActive(p->GetAudioIOToken()))
+      (p->GetAudioIOToken() > 0) &&
+      gAudioIO->IsStreamActive(p->GetAudioIOToken()))
    {
       pMixerBoard->UpdateMeters(gAudioIO->GetStreamTime(),
-                                 (p->mLastPlayMode == loopedPlay));
+         (p->mLastPlayMode == loopedPlay));
    }
 
-#ifdef EXPERIMENTAL_SCRUBBING
-   if (mScrubbing
-      &&
-      gAudioIO->IsStreamActive(GetProject()->GetAudioIOToken()))
+#ifdef EXPERIMENTAL_SCRUBBING_BASIC
+   // Call ContinueScrubbing() here rather than in SelectionHandleDrag()
+   // so that even without drag events, we can instruct the play head to
+   // keep approaching the mouse cursor, when its maximum speed is limited.
+   if (IsScrubbing())
    {
-      if (gAudioIO->GetLastPlaybackTime() < mLastScrubTime) {
-         // Allow some audio catch up
-      }
-      else {
-         wxMouseState state(::wxGetMouseState());
-         wxCoord xx = state.GetX();
-         ScreenToClient(&xx, NULL);
-         double leadPosition = PositionToTime(xx, GetLeftOffset());
-         if (mLastScrubPosition != leadPosition) {
-            wxLongLong clockTime = ::wxGetLocalTimeMillis();
-            double lagPosition = gAudioIO->GetStreamTime();
+      wxMouseState state = ::wxGetMouseState();
+      wxCoord position = state.GetX();
+      ScreenToClient(&position, NULL);
+      ContinueScrubbing(position, state.ShiftDown());
 
-            gAudioIO->SeekStream(leadPosition - lagPosition);
-
-            mLastScrubPosition = leadPosition;
-            mLastScrubTime = clockTime;
+#ifdef EXPERIMENTAL_SCRUBBING_SMOOTH_SCROLL
+      if (mSmoothScrollingScrub)
+         // Redraw with every timer tick, to keep the indicator centered.
+         Refresh(false);
+      else
+#endif
+      {
+         if (mScrubSpeedDisplayCountdown > 0) {
+            --mScrubSpeedDisplayCountdown;
+            if (mScrubSpeedDisplayCountdown == kOneSecondCountdown ||
+               mScrubSpeedDisplayCountdown == 0)
+               // Show or hide the maximum speed.
+               Refresh(false);
          }
       }
    }
@@ -1070,8 +1099,14 @@ void TrackPanel::OnTimer()
    // AS: The "indicator" is the little graphical mark shown in the ruler
    //  that indicates where the current play/record position is. (This also
    //  draws the moving vertical line.)
+
+   // PRL: mIndicatorShowing never becomes true!
    if (!gAudioIO->IsPaused() &&
-       ( mIndicatorShowing || gAudioIO->IsStreamActive(p->GetAudioIOToken())))
+       ( mIndicatorShowing || gAudioIO->IsStreamActive(p->GetAudioIOToken()))
+#ifdef EXPERIMENTAL_SCRUBBING_SMOOTH_SCROLL
+       && !mSmoothScrollingScrub
+#endif
+       )
    {
       DrawIndicator();
    }
@@ -1151,8 +1186,39 @@ void TrackPanel::DrawIndicator()
    DoDrawIndicator( dc );
 }
 
+void TrackPanel::DrawQuickPlayIndicator(wxDC & dc, double pos)
+{
+   // Erase the old indicator.
+   if( mOldQPIndicatorPos != -1 ) {
+      dc.Blit( mOldQPIndicatorPos, 0, 1, mBacking->GetHeight(), &mBackingDC, mOldQPIndicatorPos, 0 );
+      mOldQPIndicatorPos = -1;
+   }
+
+   if (pos >= 0) {
+
+      (mRuler->mIsSnapped)? AColor::SnapGuidePen( &dc) : AColor::Light( &dc, false);
+
+      // Draw indicator in all visible tracks
+      VisibleTrackIterator iter( GetProject() );
+      for( Track *t = iter.First(); t; t = iter.Next() )
+      {
+         // Convert virtual coordinate to physical
+         int y = t->GetY() - mViewInfo->vpos;
+
+         // Draw the new indicator in its new location
+         AColor::Line(dc,
+                     pos,
+                     y + kTopInset + 1,
+                     pos,
+                     y + t->GetHeight() - 3 );
+      }
+      mOldQPIndicatorPos = pos;
+   }
+}
+
 /// Second level DrawIndicator()
-void TrackPanel::DoDrawIndicator(wxDC & dc, bool repairOld /* = false */)
+void TrackPanel::DoDrawIndicator
+   (wxDC & dc, bool repairOld /* = false */, double indicator /* = -1 */)
 {
    bool onScreen;
    int x;
@@ -1192,8 +1258,10 @@ void TrackPanel::DoDrawIndicator(wxDC & dc, bool repairOld /* = false */)
          mLastIndicator = -1;
       }
 
-      // The stream time can be < 0 if the audio is currently stopped
-      pos = gAudioIO->GetStreamTime();
+      pos = indicator;
+      if (pos < 0.0)
+         // The stream time can be < 0 if the audio is currently stopped
+         pos = gAudioIO->GetStreamTime();
 
       AudacityProject *p = GetProject();
       bool audioActive = ( gAudioIO->IsStreamActive( p->GetAudioIOToken() ) != 0 );
@@ -1395,14 +1463,16 @@ void TrackPanel::OnPaint(wxPaintEvent & /* event */)
 
    // Construct the paint DC on the heap so that it may be deleted
    // early
-   wxDC *dc = new wxPaintDC( this );
+   wxDC *dc = new wxPaintDC(this);
 
    // Retrieve the damage rectangle
    wxRect box = GetUpdateRegion().GetBox();
 
+   double indicator = -1;
+
    // Recreate the backing bitmap if we have a full refresh
    // (See TrackPanel::Refresh())
-   if( mRefreshBacking || ( box == GetRect() ) )
+   if (mRefreshBacking || (box == GetRect()))
    {
       // Update visible sliders
       mTrackInfo.UpdateSliderOffset(mViewInfo->track);
@@ -1410,37 +1480,54 @@ void TrackPanel::OnPaint(wxPaintEvent & /* event */)
       // Reset (should a mutex be used???)
       mRefreshBacking = false;
 
+#ifdef EXPERIMENTAL_SCRUBBING_SMOOTH_SCROLL
+      if (mSmoothScrollingScrub &&
+         gAudioIO->IsStreamActive(GetProject()->GetAudioIOToken())) {
+         // Pan the view, so that we center the play indicator.
+         // By the time DoDrawIndicator() is reached, gAudioIO->GetStreamTime()
+         // may be a little different.
+         // Cause DoDrawIndicator to show the value as it was at this time when we begin
+         // the drawing of the tracks.  This prevents flashing of the indicator
+         // at higher magnifications, and keeps the green line still in the middle.
+         indicator = gAudioIO->GetStreamTime();
+         mViewInfo->h = std::max(0.0, indicator - mViewInfo->screen / 2.0);
+      }
+#endif
+
       // Redraw the backing bitmap
-      DrawTracks( &mBackingDC );
+      DrawTracks(&mBackingDC);
 
       // Copy it to the display
-      dc->Blit( 0, 0, mBacking->GetWidth(), mBacking->GetHeight(), &mBackingDC, 0, 0 );
+      dc->Blit(0, 0, mBacking->GetWidth(), mBacking->GetHeight(), &mBackingDC, 0, 0);
    }
    else
    {
       // Copy full, possibly clipped, damage rectange
-      dc->Blit( box.x, box.y, box.width, box.height, &mBackingDC, box.x, box.y );
+      dc->Blit(box.x, box.y, box.width, box.height, &mBackingDC, box.x, box.y);
    }
 
    // Done with the clipped DC
    delete dc;
 
    // Drawing now goes directly to the client area
-   wxClientDC cdc( this );
+   wxClientDC cdc(this);
 
    // Update the indicator in case it was damaged if this project is playing
+
+   // PRL: mIndicatorShowing never becomes true!
    AudacityProject* p = GetProject();
    if (!gAudioIO->IsPaused() &&
-       ( mIndicatorShowing || gAudioIO->IsStreamActive(p->GetAudioIOToken())))
+      (mIndicatorShowing || gAudioIO->IsStreamActive(p->GetAudioIOToken())))
    {
-      // We just want to repair, not update the old, so set the second param to true.
+      // If not smooth scrolling, then
+      // we just want to repair, not update the old, so set the second param to true.
       // This is important because this onPaint could be for just some of the tracks.
-      DoDrawIndicator( cdc, true);
+      DoDrawIndicator(cdc, (indicator < 0), indicator);
    }
 
    // Draw the cursor
-   if( mViewInfo->selectedRegion.isPoint())
-      DoDrawCursor( cdc );
+   if (mViewInfo->selectedRegion.isPoint())
+      DoDrawCursor(cdc);
 
 #if DEBUG_DRAW_TIMING
    sw.Pause();
@@ -2040,6 +2127,27 @@ void TrackPanel::HandleSelect(wxMouseEvent & event)
    wxRect r;
    Track *t = FindTrack(event.m_x, event.m_y, false, false, &r);
 
+#ifdef EXPERIMENTAL_SCRUBBING_BASIC
+   if (
+#ifdef EXPERIMENTAL_SCRUBBING_SMOOTH_SCROLL
+       event.MiddleDClick() ||
+#endif
+       event.MiddleDown()) {
+      if (IsScrubbing())
+         StopScrubbing();
+      // Don't actually start scrubbing, but collect some information
+      // needed for the decision to start scrubbing later when handling
+      // drag events.
+#ifdef EXPERIMENTAL_SCRUBBING_SMOOTH_SCROLL
+      mSmoothScrollingScrub = event.MiddleDClick();
+#endif
+      mScrubStartPosition = event.m_x;
+      mScrubStartClockTimeMillis = ::wxGetLocalTimeMillis();
+      mMouseCapture = IsSelecting;
+      return;
+   }
+#endif
+
    // AS: Ok, did the user just click the mouse, release the mouse,
    //  or drag?
    if (event.LeftDown()) {
@@ -2054,52 +2162,6 @@ void TrackPanel::HandleSelect(wxMouseEvent & event)
       }
 
    } else if (event.LeftUp() || event.RightUp()) {
-#ifdef EXPERIMENTAL_SCRUBBING
-      if(mScrubbing) {
-         if (gAudioIO->IsBusy()) {
-            AudacityProject *p = GetActiveProject();
-            if (p) {
-               ControlToolBar * ctb = p->GetControlToolBar();
-               ctb->StopPlaying();
-            }
-         }
-
-         if (mAdjustSelectionEdges) {
-            if (event.ShiftDown()) {
-               // Adjust time selection as if shift-left click at end
-               const double selend = PositionToTime(event.m_x, GetLeftOffset());
-               SelectionBoundary boundary = ChooseTimeBoundary(selend, false);
-               switch (boundary)
-               {
-               case SBLeft:
-                  mViewInfo->selectedRegion.setT0(selend);
-                  break;
-               case SBRight:
-                  mViewInfo->selectedRegion.setT1(selend);
-                  break;
-               default:
-                  wxASSERT(false);
-               }
-               UpdateSelectionDisplay();
-            }
-            else {
-               // Adjust time selection as if left click
-               StartSelection(event.m_x, r.x);
-               DisplaySelection();
-            }
-         }
-
-         mScrubbing = false;
-      }
-      else if (event.CmdDown()) {
-         // A control-click will set just the indicator to the clicked spot,
-         // and turn playback on -- but delayed until button up,
-         // and only if no intervening drag
-         StartOrJumpPlayback(event);
-      }
-      // Don't return yet
-#endif
-
       if (mSnapManager) {
          delete mSnapManager;
          mSnapManager = NULL;
@@ -2197,7 +2259,8 @@ void TrackPanel::StartOrJumpPlayback(wxMouseEvent &event)
          //the clicked point
          ControlToolBar * ctb = p->GetControlToolBar();
          //ctb->SetPlay(true);// Not needed as done in PlayPlayRegion
-         ctb->PlayPlayRegion(clicktime, endtime,false) ;
+         ctb->PlayPlayRegion
+            (SelectedRegion(clicktime, endtime), p->GetDefaultPlayOptions());
       }
       else
       {
@@ -2208,33 +2271,163 @@ void TrackPanel::StartOrJumpPlayback(wxMouseEvent &event)
          //require a new method in ControlToolBar: SetPause();
          ControlToolBar * ctb = p->GetControlToolBar();
          ctb->StopPlaying();
-         ctb->PlayPlayRegion(clicktime,endtime,false) ;
+         ctb->PlayPlayRegion(SelectedRegion(clicktime, endtime), p->GetDefaultPlayOptions());
       }
    }
 }
 
 
-#ifdef EXPERIMENTAL_SCRUBBING
-void TrackPanel::StartScrubbing(double position)
+#ifdef EXPERIMENTAL_SCRUBBING_BASIC
+bool TrackPanel::IsScrubbing()
 {
-   AudacityProject *p = GetActiveProject();
-   if (p &&
-      // Should I make a bigger tolerance than zero?
-      mLastScrubPosition != position) {
-      ControlToolBar * ctb = p->GetControlToolBar();
-      bool busy = gAudioIO->IsBusy();
-      double maxTime = p->GetTracks()->GetEndTime();
-
-      if (busy)
-         ctb->StopPlaying();
-
-      ctb->PlayPlayRegion(0, maxTime, false, false,
-         0,
-         &position);
-      mScrubbing = true;
-      mLastScrubPosition = position;
-      mLastScrubTime = ::wxGetLocalTimeMillis();
+   if (mScrubToken <= 0)
+      return false;
+   else if (mScrubToken == GetProject()->GetAudioIOToken())
+      return true;
+   else {
+      // Some other command might have stopped scrub play before we
+      // reached StopScrubbing()!  But that is okay.
+      mScrubToken = -1;
+      return false;
    }
+}
+
+#ifdef EXPERIMENTAL_SCRUBBING_SMOOTH_SCROLL
+double TrackPanel::FindScrubSpeed(double timeAtMouse) const
+{
+   // Map a time (which was mapped from a mouse position)
+   // to a speed.
+   // Map times to positive and negative speeds,
+   // with the time at the midline of the screen mapping to 0,
+   // and the extremes to the maximum scrub speed.
+
+   // Width of visible track area, in time terms:
+   const double screen = mViewInfo->screen;
+   const double origin = mViewInfo->h + screen / 2.0;
+
+   // There are various snapping zones that are this fraction of screen:
+   const double snap = 0.05;
+
+   // By shrinking denom a bit, we make margins left and right
+   // that snap to maximum and negative maximum speeds.
+   const double factor = 1.0 - (snap * 2);
+   const double denom = factor * screen / 2.0;
+   double fraction = std::min(1.0, fabs(timeAtMouse - origin) / denom);
+
+   // Snap to 1.0 and -1.0
+   const double unity = 1.0 / mMaxScrubSpeed;
+   const double tolerance = snap / factor;
+   // Make speeds near 1 available too by remapping fractions outside
+   // this snap zone
+   if (fraction <= unity - tolerance)
+      fraction *= unity / (unity - tolerance);
+   else if (fraction < unity + tolerance)
+      fraction = unity;
+   else
+      fraction = unity + (fraction - (unity + tolerance)) *
+      (1.0 - unity) / (1.0 - (unity + tolerance));
+
+   double result = fraction * mMaxScrubSpeed;
+   if (timeAtMouse < origin)
+      result *= -1.0;
+   return result;
+}
+#endif
+
+bool TrackPanel::MaybeStartScrubbing(wxMouseEvent &event)
+{
+   if (IsScrubbing())
+      return false;
+   else
+   {
+      wxCoord position = event.m_x;
+      AudacityProject *p = GetActiveProject();
+      if (p &&
+         abs(mScrubStartPosition - position) >= SCRUBBING_PIXEL_TOLERANCE) {
+         ControlToolBar * ctb = p->GetControlToolBar();
+         bool busy = gAudioIO->IsBusy();
+         double maxTime = p->GetTracks()->GetEndTime();
+         double time0 = std::min(maxTime, PositionToTime(mScrubStartPosition, GetLeftOffset()));
+         double time1 = std::min(maxTime, PositionToTime(position, GetLeftOffset()));
+         if (time1 != time0)
+         {
+            if (busy)
+               ctb->StopPlaying();
+
+            AudioIOStartStreamOptions options(p->GetDefaultPlayOptions());
+            options.timeTrack = NULL;
+            options.scrubDelay = (kTimerInterval / 1000.0);
+            options.scrubStartClockTimeMillis = mScrubStartClockTimeMillis;
+            options.minScrubStutter = 0.2;
+            // Take the starting speed limit from the transcription toolbar,
+            // but it may be varied during the scrub.
+            mMaxScrubSpeed = options.maxScrubSpeed =
+               p->GetTranscriptionToolBar()->GetPlaySpeed();
+            const bool cutPreview = false;
+            const bool backwards = time1 < time0;
+#ifdef EXPERIMENTAL_SCRUBBING_SCROLL_WHEEL
+            static const double maxScrubSpeedBase =
+               pow(2.0, 1.0 / ScrubSpeedStepsPerOctave);
+            mLogMaxScrubSpeed = floor(0.5 +
+               log(mMaxScrubSpeed) / log(maxScrubSpeedBase)
+            );
+#endif
+            mScrubSpeedDisplayCountdown = 0;
+            mScrubToken =
+               ctb->PlayPlayRegion(SelectedRegion(time0, time1), options, cutPreview, backwards);
+         }
+      }
+      else
+         mScrubStartClockTimeMillis = ::wxGetLocalTimeMillis();
+      if (IsScrubbing()) {
+         mMouseCapture = IsMiddleButtonScrubbing;
+         CaptureMouse();
+      }
+      return IsScrubbing();
+   }
+}
+
+bool TrackPanel::ContinueScrubbing(wxCoord position, bool maySkip)
+{
+   wxCoord leadPosition = position;
+   double newEnd = PositionToTime(leadPosition, GetLeftOffset());
+
+   if (maySkip)
+      // Cause OnTimer() to suppress the speed display
+      mScrubSpeedDisplayCountdown = 1;
+
+#ifdef EXPERIMENTAL_SCRUBBING_SMOOTH_SCROLL
+   if (mSmoothScrollingScrub && !maySkip) {
+      const double speed = FindScrubSpeed(newEnd);
+      return gAudioIO->EnqueueScrubBySignedSpeed(speed, mMaxScrubSpeed, maySkip);
+   }
+   else
+#endif
+      return gAudioIO->EnqueueScrubByPosition
+         (newEnd, maySkip ? 1.0 : mMaxScrubSpeed, maySkip);
+}
+
+bool TrackPanel::StopScrubbing()
+{
+   if (IsScrubbing())
+   {
+      if (gAudioIO->IsBusy()) {
+         AudacityProject *p = GetActiveProject();
+         if (p) {
+            ControlToolBar * ctb = p->GetControlToolBar();
+            ctb->StopPlaying();
+         }
+      }
+      mScrubToken = -1;
+
+#ifdef EXPERIMENTAL_SCRUBBING_SMOOTH_SCROLL
+      mSmoothScrollingScrub = false;
+#endif
+
+      return true;
+   }
+   else
+      return false;
 }
 #endif
 
@@ -2296,11 +2489,6 @@ void TrackPanel::SelectionHandleClick(wxMouseEvent & event,
 #endif
 
    if (event.ShiftDown()
-
-#ifdef EXPERIMENTAL_SCRUBBING
-       // Ctrl prevails over Shift with scrubbing enabled
-       && !event.CmdDown()
-#endif
 
 #ifdef USE_MIDI
        && !stretch
@@ -2369,17 +2557,11 @@ void TrackPanel::SelectionHandleClick(wxMouseEvent & event,
            && !stretch
 #endif
           ) {
-#ifdef EXPERIMENTAL_SCRUBBING
-      // With scrubbing enabled, playback happens on button up, not down,
-      // and only if we do not start a scrub in the interim.
-      mScrubbing = false;
-      mLastScrubPosition = PositionToTime(event.m_x, GetLeftOffset());
-#else
+
       StartOrJumpPlayback(event);
 
       // Not starting a drag
       SetCapturedTrack(NULL, IsUncaptured);
-#endif
       return;
    }
 
@@ -3129,16 +3311,22 @@ void TrackPanel::SelectionHandleDrag(wxMouseEvent & event, Track *clickedTrack)
    if (!event.Dragging() && !mAutoScrolling)
       return;
 
-   if (event.CmdDown()) {
-#ifdef EXPERIMENTAL_SCRUBBING
-      if (!mScrubbing) {
-         double position = PositionToTime(event.m_x, GetLeftOffset());
-         StartScrubbing(position);
-      }
-      else
-#else
-      // Ctrl-drag has no meaning, fuhggeddaboudit
+#ifdef EXPERIMENTAL_SCRUBBING_BASIC
+   if (IsScrubbing()) {
+      // May need a screen update, but do nothing else.  Don't change selection.
+      if (mAutoScrolling)
+         UpdateSelectionDisplay();
+      return;
+   }
+   else if (event.MiddleIsDown()) {
+      MaybeStartScrubbing(event);
+      // Do nothing more, don't change selection
+      return;
+   }
 #endif
+
+   if (event.CmdDown()) {
+      // Ctrl-drag has no meaning, fuhggeddaboudit
       return;
    }
 
@@ -5973,13 +6161,20 @@ void TrackPanel::HandleWheelRotation(wxMouseEvent & event)
    double steps = event.m_wheelRotation /
       (event.m_wheelDelta > 0 ? (double)event.m_wheelDelta : 120.0);
 
-   if (event.ShiftDown())
+   if (event.ShiftDown()
+#ifdef EXPERIMENTAL_SCRUBBING_SMOOTH_SCROLL
+       // Don't pan during smooth scrolling.  That would conflict with keeping
+       // the play indicator centered.
+       && !mSmoothScrollingScrub
+#endif
+      )
    {
       // MM: Scroll left/right when used with Shift key down
       mListener->TP_ScrollWindow(
          mViewInfo->h +
          50.0 * -steps / mViewInfo->zoom);
-   } else if (event.CmdDown())
+   }
+   else if (event.CmdDown())
    {
 #if 0
       // JKC: Alternative scroll wheel zooming code
@@ -5999,7 +6194,20 @@ void TrackPanel::HandleWheelRotation(wxMouseEvent & event)
       int trackLeftEdge = GetLeftOffset();
 
       // Time corresponding to mouse position
-      double center_h = PositionToTime(event.m_x, trackLeftEdge);
+      wxCoord xx;
+      double center_h;
+#ifdef EXPERIMENTAL_SCRUBBING_SMOOTH_SCROLL
+      if (mSmoothScrollingScrub) {
+         // Expand or contract about the center, ignoring mouse position
+         center_h = mViewInfo->h + mViewInfo->screen / 2.0;
+         xx = TimeToPosition(center_h, trackLeftEdge);
+      }
+      else
+#endif
+      {
+         xx = event.m_x;
+         center_h = PositionToTime(xx, trackLeftEdge);
+      }
       // Time corresponding to last (most far right) audio.
       double audioEndTime = mTracks->GetEndTime();
 
@@ -6017,18 +6225,40 @@ void TrackPanel::HandleWheelRotation(wxMouseEvent & event)
       // Constrain maximum as well as minimum zoom.
       mViewInfo->zoom = wxMax( gMinZoom, wxMin(mViewInfo->zoom * pow(2.0, steps), gMaxZoom));
 
-      double new_center_h = PositionToTime(event.m_x, trackLeftEdge);
+      double new_center_h = PositionToTime(xx, trackLeftEdge);
       mViewInfo->h += (center_h - new_center_h);
 
       MakeParentRedrawScrollbars();
       Refresh(false);
-   } else
+   }
+   else
    {
-      // MM: Scroll up/down when used without modifier keys
-      double lines = steps * 4 + mVertScrollRemainder;
-      mVertScrollRemainder = lines - floor(lines);
-      lines = floor(lines);
-      mListener->TP_ScrollUpDown((int)-lines);
+#ifdef EXPERIMENTAL_SCRUBBING_SCROLL_WHEEL
+      if (IsScrubbing()) {
+         const int newLogMaxScrubSpeed = mLogMaxScrubSpeed + steps;
+         static const double maxScrubSpeedBase =
+            pow(2.0, 1.0 / ScrubSpeedStepsPerOctave);
+         double newSpeed = pow(maxScrubSpeedBase, newLogMaxScrubSpeed);
+         if (newSpeed >= AudioIO::GetMinScrubSpeed() &&
+             newSpeed <= AudioIO::GetMaxScrubSpeed()) {
+            mLogMaxScrubSpeed = newLogMaxScrubSpeed;
+            mMaxScrubSpeed = newSpeed;
+#ifdef EXPERIMENTAL_SCRUBBING_SMOOTH_SCROLL
+            if (!mSmoothScrollingScrub)
+#endif
+               // Show the speed for one second
+               mScrubSpeedDisplayCountdown = kOneSecondCountdown + 1;
+         }
+      }
+      else
+#endif
+      {
+         // MM: Scroll up/down when used without modifier keys
+         double lines = steps * 4 + mVertScrollRemainder;
+         mVertScrollRemainder = lines - floor(lines);
+         lines = floor(lines);
+         mListener->TP_ScrollUpDown((int)-lines);
+      }
    }
 }
 
@@ -6279,6 +6509,18 @@ void TrackPanel::OnMouseEvent(wxMouseEvent & event)
    case IsAdjustingLabel:
       HandleLabelTrackMouseEvent((LabelTrack *)mCapturedTrack, mCapturedRect, event);
       break;
+#ifdef EXPERIMENTAL_SCRUBBING_BASIC
+   case IsMiddleButtonScrubbing:
+      if (event.MiddleUp()) {
+         if (IsScrubbing()) {
+            StopScrubbing();
+            if (HasCapture())
+               ReleaseMouse();
+            mMouseCapture = IsUncaptured;
+         }
+      }
+      break;
+#endif
    default: //includes case of IsUncaptured
       HandleTrackSpecificMouseEvent(event);
       break;
@@ -7081,6 +7323,72 @@ void TrackPanel::DrawEverythingElse(wxDC * dc,
       if (mSnapRight >= 0) {
          AColor::Line(*dc, (int)mSnapRight, 0, mSnapRight, 30000);
       }
+   }
+
+   if (IsScrubbing())
+      DrawScrubSpeed(*dc);
+}
+
+void TrackPanel::DrawScrubSpeed(wxDC &dc)
+{
+   // Don't draw it during stutter play with shift down
+   if (!::wxGetMouseState().ShiftDown() && (
+
+          mScrubSpeedDisplayCountdown > 0
+
+#ifdef EXPERIMENTAL_SCRUBBING_SMOOTH_SCROLL
+          || mSmoothScrollingScrub
+#endif
+
+   )) {
+      int panelWidth, panelHeight;
+      GetSize(&panelWidth, &panelHeight);
+
+      // Where's the mouse?
+      int xx, yy;
+      ::wxGetMousePosition(&xx, &yy);
+      ScreenToClient(&xx, &yy);
+
+      // Find the text
+      const double speed =
+#ifdef EXPERIMENTAL_SCRUBBING_SMOOTH_SCROLL
+         mSmoothScrollingScrub
+         ? FindScrubSpeed(PositionToTime(xx, GetLeftOffset()))
+         :
+#endif
+         mMaxScrubSpeed;
+      const wxChar *format =
+#ifdef EXPERIMENTAL_SCRUBBING_SMOOTH_SCROLL
+         mSmoothScrollingScrub ? wxT("%+.2f")
+         :
+#endif
+         wxT("%.2f");
+      wxString text(wxString::Format(format, speed));
+
+      static const wxFont labelFont(24, wxSWISS, wxNORMAL, wxNORMAL);
+      dc.SetFont(labelFont);
+
+      // Find the origin for drawing text
+      wxCoord width, height;
+      dc.GetTextExtent(text, &width, &height);
+      xx = std::max(0, std::min(panelWidth - width, xx - width / 2));
+
+      // Put the text above the cursor, if it fits.
+      enum { offset = 20 };
+      yy -= height + offset;
+      if (yy < 0)
+         yy += height + 2 * offset;
+      yy = std::max(0, std::min(panelHeight - height, yy));
+
+      // To do, theming?
+      static const wxColour red(255, 0, 0), green(0, 255, 0);
+#ifdef EXPERIMENTAL_SCRUBBING_SMOOTH_SCROLL
+      if (mSmoothScrollingScrub)
+         dc.SetTextForeground(green);
+      else
+#endif
+         dc.SetTextForeground(red);
+      dc.DrawText(text, xx, yy);
    }
 }
 

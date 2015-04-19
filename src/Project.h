@@ -52,6 +52,7 @@ class wxScrollBar;
 class wxPanel;
 
 class AudacityProject;
+class AutoSaveFile;
 class Importer;
 class ODLock;
 class RecordingRecoveryHandler;
@@ -82,6 +83,7 @@ class LyricsWindow;
 class MixerBoard;
 class MixerBoardFrame;
 
+struct AudioIOStartStreamOptions;
 
 AudacityProject *CreateNewAudacityProject();
 AUDACITY_DLL_API AudacityProject *GetActiveProject();
@@ -134,6 +136,8 @@ class AUDACITY_DLL_API AudacityProject:  public wxFrame,
    AudacityProject(wxWindow * parent, wxWindowID id,
                    const wxPoint & pos, const wxSize & size);
    virtual ~AudacityProject();
+
+   AudioIOStartStreamOptions GetDefaultPlayOptions();
 
    TrackList *GetTracks() { return mTracks; }
    UndoManager *GetUndoManager() { return &mUndoManager; }
@@ -433,7 +437,7 @@ class AUDACITY_DLL_API AudacityProject:  public wxFrame,
    virtual void OnAudioIORate(int rate);
    virtual void OnAudioIOStartRecording();
    virtual void OnAudioIOStopRecording();
-   virtual void OnAudioIONewBlockFiles(const wxString& blockFileLog);
+   virtual void OnAudioIONewBlockFiles(const AutoSaveFile & blockFileLog);
 
    // Command Handling
    bool TryToMakeActionAllowed( wxUint32 & flags, wxUint32 flagsRqd, wxUint32 mask );
@@ -460,8 +464,6 @@ class AUDACITY_DLL_API AudacityProject:  public wxFrame,
 
    void AutoSave();
    void DeleteCurrentAutoSaveFile();
-
-   static bool GetCacheBlockFiles();
 
  public:
    bool IsSoloSimple() { return mSoloPref == wxT("Simple"); }
