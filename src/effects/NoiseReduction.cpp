@@ -1472,6 +1472,7 @@ const ControlInfo *controlInfo() {
          -20.0, 20.0, 4000, wxT("%.2f"), false,
          XO("Sensiti&vity (dB):"), XO("Old Sensitivity")),
          // add here
+
 #endif
    };
 
