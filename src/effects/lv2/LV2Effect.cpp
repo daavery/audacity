@@ -23,6 +23,9 @@
 
 
 #include <wx/button.h>
+#if wxCHECK_VERSION(3,0,0)
+#include <wx/crt.h>   // needed for wxPrintf()
+#endif
 #include <wx/choice.h>
 #include <wx/dcbuffer.h>
 #include <wx/dialog.h>
