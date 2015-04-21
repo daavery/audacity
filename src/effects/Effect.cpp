@@ -2447,8 +2447,8 @@ public:
    :  wxPanel(parent)
    {
       // This fools NVDA into not saying "Panel" when the dialog gets focus
-      SetName(wxT(","));
-      SetLabel(wxT(","));
+      SetName(wxT("\a"));
+      SetLabel(wxT("\a"));
 
       mAcceptsFocus = true;
    }
@@ -2633,6 +2633,10 @@ bool EffectUIHost::Initialize()
    vs->Add(hs, 1, wxEXPAND);
 
    wxPanel *bar = new wxPanel(this, wxID_ANY);
+
+   // This fools NVDA into not saying "Panel" when the dialog gets focus
+   bar->SetName(wxT("\a"));
+   bar->SetLabel(wxT("\a"));
 
    wxBoxSizer *bs = new wxBoxSizer(wxHORIZONTAL);
 
