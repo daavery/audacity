@@ -911,9 +911,9 @@ AudacityProject::AudacityProject(wxWindow * parent, wxWindowID id,
 
    wxBoxSizer *bs = new wxBoxSizer( wxVERTICAL );
    bs->Add( mToolManager->GetTopDock(), 0, wxEXPAND | wxALIGN_LEFT | wxALIGN_TOP );
-   bs->Add( mRuler, 0, wxEXPAND | wxALIGN_LEFT | wxALIGN_CENTRE );
+   bs->Add( mRuler, 0, wxEXPAND | wxALIGN_LEFT  );  //  remove | wxALIGN_CENTRE
    bs->Add( pPage, 1, wxEXPAND | wxALIGN_LEFT );
-   bs->Add( mToolManager->GetBotDock(), 0, wxEXPAND | wxALIGN_LEFT | wxALIGN_BOTTOM );
+   bs->Add( mToolManager->GetBotDock(), 0, wxEXPAND | wxALIGN_LEFT  );  // remove | wxALIGN_BOTTOM
    SetAutoLayout( true );
    SetSizer( bs );
    bs->Layout();
@@ -959,8 +959,8 @@ AudacityProject::AudacityProject(wxWindow * parent, wxWindowID id,
    vs = new wxBoxSizer( wxVERTICAL );
 
    // Vertical scroll bar
-   vs->Add( mVsbar, 1, wxEXPAND | wxALIGN_RIGHT | wxALIGN_TOP );
-   hs->Add( vs, 0, wxEXPAND | wxALIGN_RIGHT | wxALIGN_TOP );
+   vs->Add( mVsbar, 1, wxEXPAND |  wxALIGN_TOP );  // remove  wxALIGN_RIGHT |
+   hs->Add( vs, 0, wxEXPAND  | wxALIGN_TOP );  //  remove | wxALIGN_RIGHT
    bs->Add( hs, 1, wxEXPAND | wxALIGN_LEFT | wxALIGN_TOP );
 
    // Bottom horizontal grouping
@@ -970,7 +970,7 @@ AudacityProject::AudacityProject(wxWindow * parent, wxWindowID id,
    hs->Add( mTrackPanel->GetLeftOffset() - 1, 0 );
    hs->Add( mHsbar, 1, wxALIGN_BOTTOM );
    hs->Add( mVsbar->GetSize().GetWidth(), 0 );
-   bs->Add( hs, 0, wxEXPAND | wxALIGN_LEFT | wxALIGN_BOTTOM );
+   bs->Add( hs, 0, wxEXPAND | wxALIGN_LEFT  );  //  remove | wxALIGN_BOTTOM
 
    // Lay it out
    pPage->SetAutoLayout(true);

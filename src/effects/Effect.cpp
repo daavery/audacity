@@ -2765,7 +2765,7 @@ bool EffectUIHost::Initialize()
    bar->SetSizerAndFit(bs);
 
    wxSizer *s = CreateStdButtonSizer(this, eApplyButton | eCloseButton | (mEffect->mUIDebug ? eDebugButton : 0), bar);
-   vs->Add(s, 0, wxEXPAND | wxALIGN_CENTER_VERTICAL);
+   vs->Add(s, 0, wxEXPAND );  //remove | wxALIGN_CENTER_VERTICAL
 
    SetSizer(vs);
    Layout();

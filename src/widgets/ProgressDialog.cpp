@@ -1115,14 +1115,14 @@ ProgressDialog::ProgressDialog(const wxString & title, const wxString & message,
    if (!(flags & pdlgHideStopButton))
    {
       w = new wxButton(this, wxID_OK, _("Stop"));
-      h->Add(w, 0, wxALIGN_RIGHT | wxRIGHT | wxBOTTOM, 10);
+      h->Add(w, 0,  wxRIGHT | wxBOTTOM, 10);  // remove wxALIGN_RIGHT |
       ds.x += w->GetSize().x + 10;
    }
 
    if (!(flags & pdlgHideCancelButton))
    {
       w = new wxButton(this, wxID_CANCEL, _("Cancel"));
-      h->Add(w, 0, wxALIGN_RIGHT | wxRIGHT | wxBOTTOM, 10);
+      h->Add(w, 0,  wxRIGHT | wxBOTTOM, 10); //remove wxALIGN_RIGHT |
       ds.x += w->GetSize().x + 10;
    }
 
