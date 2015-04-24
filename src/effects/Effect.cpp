@@ -534,6 +534,11 @@ bool Effect::LoadUserPreset(const wxString & name)
       return true;
    }
 
+   if (mClient)
+   {
+      return mClient->LoadUserPreset(name);
+   }
+
    wxString parms;
    if (!GetPrivateConfig(name, wxT("Parameters"), parms))
    {
@@ -550,6 +555,11 @@ bool Effect::SaveUserPreset(const wxString & name)
       return true;
    }
 
+   if (mClient)
+   {
+      return mClient->SaveUserPreset(name);
+   }
+
    wxString parms;
    if (!GetAutomationParameters(parms))
    {
@@ -561,16 +571,31 @@ bool Effect::SaveUserPreset(const wxString & name)
 
 wxArrayString Effect::GetFactoryPresets()
 {
+   if (mClient)
+   {
+      return mClient->GetFactoryPresets();
+   }
+
    return wxArrayString();
 }
 
-bool Effect::LoadFactoryPreset(int WXUNUSED(id))
+bool Effect::LoadFactoryPreset(int id)
 {
+   if (mClient)
+   {
+      return mClient->LoadFactoryPreset(id);
+   }
+
    return true;
 }
 
 bool Effect::LoadFactoryDefaults()
 {
+   if (mClient)
+   {
+      return mClient->LoadFactoryDefaults();
+   }
+
    return LoadUserPreset(GetFactoryDefaultsGroup());
 }
 
