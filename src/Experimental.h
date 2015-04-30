@@ -39,7 +39,7 @@
 #define EXPERIMENTAL_FULL_WASAPI
 
 // JKC (effect by Norm C, 02 Oct 2013)
-#define EXPERIMENTAL_SCIENCE_FILTERS
+//#define EXPERIMENTAL_SCIENCE_FILTERS
 
 // LLL, 01 Oct 2013:
 // new key assignment view for preferences
@@ -76,6 +76,9 @@
 // 
 // All code removed after 2.1.0 release since it was unmaintained. LLL
 //#define EFFECT_CATEGORIES
+
+// JKC Apr 2015, Menu item to manage effects.
+#define EXPERIMENTAL_EFFECT_MANAGEMENT
 
 // Andreas Micheler, 20.Nov 2007:
 // A spectrumLogF-like view mode with notes quantization.
@@ -184,5 +187,6 @@
 #if !defined(wxUSE_DEBUGREPORT) || !wxUSE_DEBUGREPORT
 #undef EXPERIMENTAL_CRASH_REPORT
 #endif
+
 
 #endif

@@ -394,6 +394,7 @@ public:
    // constructors and destructors
    PluginRegistrationDialog(ProviderMap & map);
    virtual ~PluginRegistrationDialog();
+   void RegisterDefaultEffects();
 
 private:
    void Populate();
@@ -555,7 +556,7 @@ void PluginRegistrationDialog::PopulateOrExchange(ShuttleGui &S)
    wxRect iconrect;
 
    int i = 0;
-   for (ProviderMap::iterator iter = mMap.begin(); iter != mMap.end(); iter++, i++)
+   for (ProviderMap::iterator iter = mMap.begin(); iter != mMap.end(); ++iter, i++)
    {
       miState.Add( SHOW_CHECKED );
 
@@ -754,6 +755,58 @@ void PluginRegistrationDialog::OnOK(wxCommandEvent & WXUNUSED(evt))
 
    EndModal(mCancelClicked ? wxID_CANCEL : wxID_OK);
 }
+
+void PluginRegistrationDialog::RegisterDefaultEffects()
+{
+   PluginManager & pm = PluginManager::Get();
+   ModuleManager & mm = ModuleManager::Get();
+
+   int i = 0;
+   for (ProviderMap::iterator iter = mMap.begin(); iter != mMap.end(); ++iter, i++)
+   {
+      wxFileName fname = iter->first;
+      wxString name = fname.GetName();
+      wxString path = iter->first;
+
+      // Create a placeholder descriptor to show we've seen this plugin before and not
+      // to show it as new the next time Audacity starts.
+      //
+      // Placeholder descriptors have a plugin type of PluginTypeNone and the ID is the
+      // path.
+      PluginDescriptor & plug = pm.mPlugins[path];
+
+      plug.SetID(path);
+      plug.SetPath(path);
+      plug.SetEnabled(false);
+      plug.SetValid(false);
+
+      // This is just a proof of concept to show we can get a list of default effects.
+      // Here we take the Builtin ones, and remove several optional ones, so that they become
+      // opt-in.
+      bool bAddIt = fname.GetVolume().StartsWith( wxString( BUILTIN_EFFECT_PREFIX).BeforeFirst(':')  );
+      wxLogDebug(wxT("Name: [%s]"), fname.GetName().c_str() );
+      bAddIt &= !fname.GetName().StartsWith( wxT(" Leveller") );
+      bAddIt &= !fname.GetName().StartsWith( wxT(" Auto Duck") );
+      bAddIt &= !fname.GetName().StartsWith( wxT(" Paulstretch") );
+      bAddIt &= !fname.GetName().StartsWith( wxT(" Time Scale") );
+      bAddIt &= !fname.GetName().StartsWith( wxT(" Classic Filters") );
+
+      // Built in effects get registered...
+      if (bAddIt)
+      {
+         wxArrayString providers = mMap[path];
+         for (size_t j = 0, cnt = providers.GetCount(); j < cnt; j++)
+         {
+            if (mm.RegisterPlugin(providers[j], path))
+            {
+               break;
+            }
+         }
+      }
+      wxYield();
+   }
+}
+
 
 void PluginRegistrationDialog::OnCancel(wxCommandEvent & WXUNUSED(evt))
 {
@@ -1183,6 +1236,11 @@ void PluginManager::FindFilesInPathList(const wxString & pattern,
    return;
 }
 
+bool PluginManager::HasSharedConfigGroup(const PluginID & ID, const wxString & group)
+{
+   return HasGroup(SharedGroup(ID, group));
+}
+
 bool PluginManager::GetSharedConfigSubgroups(const PluginID & ID, const wxString & group, wxArrayString & subgroups)
 {
    return GetSubgroups(SharedGroup(ID, group), subgroups);
@@ -1268,6 +1326,11 @@ bool PluginManager::RemoveSharedConfig(const PluginID & ID, const wxString & gro
    }
 
    return result;
+}
+
+bool PluginManager::HasPrivateConfigGroup(const PluginID & ID, const wxString & group)
+{
+   return HasGroup(PrivateGroup(ID, group));
 }
 
 bool PluginManager::GetPrivateConfigSubgroups(const PluginID & ID, const wxString & group, wxArrayString & subgroups)
@@ -1421,7 +1484,13 @@ void PluginManager::Initialize()
    ModuleManager::Get().DiscoverProviders();
 
    // And finally check for updates
+   // CheckForUpdates will prompt for what to add normally.
+   // If it is told kJUST_STANDARD_EFFECTS then it doesn't prompt.
+#ifdef EXPERIMENTAL_EFFECT_MANAGEMENT
+   CheckForUpdates(kJUST_STANDARD_EFFECTS);
+#else
    CheckForUpdates();
+#endif
 }
 
 void PluginManager::Terminate()
@@ -1734,7 +1803,7 @@ void PluginManager::Save()
 void PluginManager::SaveGroup(PluginType type)
 {
    wxString group = GetPluginTypeString(type);
-   for (PluginMap::iterator iter = mPlugins.begin(); iter != mPlugins.end(); iter++)
+   for (PluginMap::iterator iter = mPlugins.begin(); iter != mPlugins.end(); ++iter)
    {
       PluginDescriptor & plug = iter->second;
 
@@ -1812,7 +1881,7 @@ void PluginManager::SaveGroup(PluginType type)
    return;
 }
 
-void PluginManager::CheckForUpdates()
+void PluginManager::CheckForUpdates(eItemsToUpdate UpdateWhat)
 {
    // Get ModuleManager reference
    ModuleManager & mm = ModuleManager::Get();
@@ -1822,6 +1891,9 @@ void PluginManager::CheckForUpdates()
    bool doCheck;
    gPrefs->Read(wxT("/Plugins/Rescan"), &doRescan, true);
    gPrefs->Read(wxT("/Plugins/CheckForUpdates"), &doCheck, true);
+
+   if( UpdateWhat == kPROMPT_TO_ADD_EFFECTS )
+      doRescan = true;
 
    ProviderMap map;
 
@@ -1861,13 +1933,13 @@ void PluginManager::CheckForUpdates()
          plug.SetValid(mm.IsPluginValid(plug.GetProviderID(), plugPath));
       }
 
-      iter++;
+      ++iter;
    }
 
    // If we're only checking for new plugins, then remove all of the known ones
    if (doCheck && !doRescan)
    {
-      for (PluginMap::iterator iter = mPlugins.begin(); iter != mPlugins.end(); iter++)
+      for (PluginMap::iterator iter = mPlugins.begin(); iter != mPlugins.end(); ++iter)
       {
          PluginDescriptor & plug = iter->second;
          const wxString & plugPath = plug.GetPath();
@@ -1883,7 +1955,12 @@ void PluginManager::CheckForUpdates()
    if (map.size() != 0)
    {
       PluginRegistrationDialog dlg(map);
-      if (dlg.ShowModal() == wxID_OK)
+      if( UpdateWhat == kJUST_STANDARD_EFFECTS )
+      {
+         dlg.RegisterDefaultEffects();
+         gPrefs->Write(wxT("/Plugins/Rescan"), false);
+      }
+      else if (dlg.ShowModal() == wxID_OK)
       {
          gPrefs->Write(wxT("/Plugins/Rescan"), false);
       }
@@ -1898,7 +1975,7 @@ int PluginManager::GetPluginCount(PluginType type)
 {
    int num = 0;
 
-   for (PluginMap::iterator iter = mPlugins.begin(); iter != mPlugins.end(); iter++)
+   for (PluginMap::iterator iter = mPlugins.begin(); iter != mPlugins.end(); ++iter)
    {
       if (iter->second.GetPluginType() == type)
       {
@@ -1921,7 +1998,7 @@ const PluginDescriptor *PluginManager::GetPlugin(const PluginID & ID)
 
 const PluginDescriptor *PluginManager::GetFirstPlugin(PluginType type)
 {
-   for (mPluginsIter = mPlugins.begin(); mPluginsIter != mPlugins.end(); mPluginsIter++)
+   for (mPluginsIter = mPlugins.begin(); mPluginsIter != mPlugins.end(); ++mPluginsIter)
    {
       PluginDescriptor & plug = mPluginsIter->second;
       bool familyEnabled = true;
@@ -1959,7 +2036,7 @@ const PluginDescriptor *PluginManager::GetNextPlugin(PluginType type)
 
 const PluginDescriptor *PluginManager::GetFirstPluginForEffectType(EffectType type)
 {
-   for (mPluginsIter = mPlugins.begin(); mPluginsIter != mPlugins.end(); mPluginsIter++)
+   for (mPluginsIter = mPlugins.begin(); mPluginsIter != mPlugins.end(); ++mPluginsIter)
    {
       PluginDescriptor & plug = mPluginsIter->second;
 
@@ -2210,29 +2287,46 @@ wxFileConfig *PluginManager::GetSettings()
    return mSettings;
 }
 
-bool PluginManager::GetSubgroups(const wxString & group, wxArrayString & subgroups)
+bool PluginManager::HasGroup(const wxString & group)
 {
-   bool result = false;
+   wxFileConfig *settings = GetSettings();
 
-   if (!group.IsEmpty())
+   bool res = settings->HasGroup(group);
+   if (res)
    {
-      wxString name = wxEmptyString;
-      long index = 0;
-      wxString path = GetSettings()->GetPath();
-      GetSettings()->SetPath(group);
-
-      if (GetSettings()->GetFirstGroup(name, index))
-      {
-         do
-         {
-            subgroups.Add(name);
-         } while (GetSettings()->GetNextGroup(name, index));
-      }
-
-      GetSettings()->SetPath(path);
+      // The group exists, but empty groups aren't considered valid
+      wxString oldPath = settings->GetPath();
+      settings->SetPath(group);
+      res = settings->GetNumberOfEntries() || settings->GetNumberOfGroups();
+      settings->SetPath(oldPath);
    }
 
-   return result;
+   return res;
+}
+
+bool PluginManager::GetSubgroups(const wxString & group, wxArrayString & subgroups)
+{
+   if (group.IsEmpty() || !HasGroup(group))
+   {
+      return false;
+   }
+
+   wxString path = GetSettings()->GetPath();
+   GetSettings()->SetPath(group);
+
+   wxString name = wxEmptyString;
+   long index = 0;
+   if (GetSettings()->GetFirstGroup(name, index))
+   {
+      do
+      {
+         subgroups.Add(name);
+      } while (GetSettings()->GetNextGroup(name, index));
+   }
+
+   GetSettings()->SetPath(path);
+
+   return true;
 }
 
 bool PluginManager::GetConfig(const wxString & key, int & value, int defval)

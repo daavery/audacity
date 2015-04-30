@@ -59,7 +59,7 @@ EffectManager::~EffectManager()
    while (iter != mHostEffects.end())
    {
       delete iter->second;
-      iter++;
+      ++iter;
    }
 }
 
@@ -94,12 +94,14 @@ bool EffectManager::DoEffect(const PluginID & ID,
    }
 #endif
 
-   return effect->DoEffect(parent,
-                           projectRate,
-                           list,
-                           factory,
-                           selectedRegion,
-                           shouldPrompt);
+   bool res = effect->DoEffect(parent,
+                               projectRate,
+                               list,
+                               factory,
+                               selectedRegion,
+                               shouldPrompt);
+
+   return res;
 }
 
 wxString EffectManager::GetEffectName(const PluginID & ID)
@@ -166,6 +168,13 @@ wxString EffectManager::GetEffectParameters(const PluginID & ID)
 
       effect->GetAutomationParameters(parms);
 
+      // Some effects don't have automatable parameters and will not return
+      // anything, so try to get the active preset (current or factory).
+      if (parms.IsEmpty())
+      {
+         parms = GetDefaultPreset(ID);
+      }
+
       return parms;
    }
 
@@ -176,12 +185,19 @@ bool EffectManager::SetEffectParameters(const PluginID & ID, const wxString & pa
 {
    Effect *effect = GetEffect(ID);
    
-   if (effect)
+   if (!effect)
    {
-      return effect->SetAutomationParameters(params);
+      return false;
    }
 
-   return false;
+   EffectAutomationParameters eap(params);
+
+   if (eap.HasEntry(wxT("Use Preset")))
+   {
+      return effect->SetAutomationParameters(eap.Read(wxT("Use Preset")));
+   }
+
+   return effect->SetAutomationParameters(params);
 }
 
 bool EffectManager::PromptUser(const PluginID & ID, wxWindow *parent)
@@ -191,10 +207,98 @@ bool EffectManager::PromptUser(const PluginID & ID, wxWindow *parent)
 
    if (effect)
    {
-      result = effect->PromptUser(parent, true);
+      result = effect->PromptUser(parent);
    }
 
    return result;
+}
+
+bool EffectManager::HasPresets(const PluginID & ID)
+{
+   Effect *effect = GetEffect(ID);
+
+   if (!effect)
+   {
+      return false;
+   }
+
+   return effect->GetUserPresets().GetCount() > 0 ||
+          effect->GetFactoryPresets().GetCount() > 0 ||
+          effect->HasCurrentSettings() ||
+          effect->HasFactoryDefaults();
+}
+
+wxString EffectManager::GetPreset(const PluginID & ID, const wxString & params, wxWindow * parent)
+{
+   Effect *effect = GetEffect(ID);
+
+   if (!effect)
+   {
+      return wxEmptyString;
+   }
+
+   EffectAutomationParameters eap(params);
+
+   wxString preset;
+   if (eap.HasEntry(wxT("Use Preset")))
+   {
+      preset = eap.Read(wxT("Use Preset"));
+   }
+
+   preset = effect->GetPreset(parent, preset);
+   if (preset.IsEmpty())
+   {
+      return preset;
+   }
+
+   eap.DeleteAll();
+   
+   eap.Write(wxT("Use Preset"), preset);
+   eap.GetParameters(preset);
+
+   return preset;
+}
+
+wxString EffectManager::GetDefaultPreset(const PluginID & ID)
+{
+   Effect *effect = GetEffect(ID);
+
+   if (!effect)
+   {
+      return wxEmptyString;
+   }
+
+   wxString preset;
+   if (effect->HasCurrentSettings())
+   {
+      preset = Effect::kCurrentSettingsIdent;
+   }
+   else if (effect->HasFactoryDefaults())
+   {
+      preset = Effect::kFactoryDefaultsIdent;
+   }
+
+   if (!preset.IsEmpty())
+   {
+      EffectAutomationParameters eap;
+
+      eap.Write(wxT("Use Preset"), preset);
+      eap.GetParameters(preset);
+   }
+
+   return preset;
+}
+
+void EffectManager::SetBatchProcessing(const PluginID & ID, bool start)
+{
+   Effect *effect = GetEffect(ID);
+
+   if (!effect)
+   {
+      return;
+   }
+
+   effect->SetBatchProcessing(start);
 }
 
 #if defined(EXPERIMENTAL_EFFECTS_RACK)
@@ -633,3 +737,4 @@ const PluginID & EffectManager::GetEffectByIdentifier(const wxString & strTarget
 
    return empty;;
 }
+

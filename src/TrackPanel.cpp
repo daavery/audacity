@@ -3752,7 +3752,7 @@ void TrackPanel::ForwardEventToWaveTrackEnvelope(wxMouseEvent & event)
    //  ie one of the Wave displays
    if (display <= 1) {
       bool dB = (display == 1);
-      bool needUpdate = false;
+      bool needUpdate;
 
       // AS: Then forward our mouse event to the envelope.
       // It'll recalculate and then tell us whether or not to redraw.
@@ -7189,7 +7189,7 @@ void TrackPanel::DrawTracks(wxDC * dc)
                             *dc, region, tracksRect, clip, mViewInfo,
                             envelopeFlag, samplesFlag, sliderFlag);
 
-   DrawEverythingElse(dc, region, panelRect, clip);
+   DrawEverythingElse(dc, region, clip);
 }
 
 /// Draws 'Everything else'.  In particular it draws:
@@ -7197,9 +7197,8 @@ void TrackPanel::DrawTracks(wxDC * dc)
 ///  - Zooming Indicators.
 ///  - Fills in space below the tracks.
 void TrackPanel::DrawEverythingElse(wxDC * dc,
-                                    const wxRegion region,
-                                    const wxRect WXUNUSED(panelRect),
-                                    const wxRect clip)
+                                    const wxRegion &region,
+                                    const wxRect & clip)
 {
    // We draw everything else
 
@@ -7402,7 +7401,7 @@ void TrackPanel::DrawScrubSpeed(wxDC &dc)
 /// be zoomed into when the user clicks and drags with a
 /// zoom cursor.  Handles both vertical and horizontal
 /// zooming.
-void TrackPanel::DrawZooming(wxDC * dc, const wxRect clip)
+void TrackPanel::DrawZooming(wxDC * dc, const wxRect & clip)
 {
    wxRect r;
 
@@ -7429,8 +7428,8 @@ void TrackPanel::DrawZooming(wxDC * dc, const wxRect clip)
 }
 
 
-void TrackPanel::DrawOutside(Track * t, wxDC * dc, const wxRect rec,
-                             const wxRect trackRect)
+void TrackPanel::DrawOutside(Track * t, wxDC * dc, const wxRect & rec,
+                             const wxRect & trackRect)
 {
    wxRect r = rec;
    int labelw = GetLabelWidth();
@@ -7557,7 +7556,7 @@ void TrackPanel::DrawOutside(Track * t, wxDC * dc, const wxRect rec,
 #endif // USE_MIDI
 }
 
-void TrackPanel::DrawOutsideOfTrack(Track * t, wxDC * dc, const wxRect r)
+void TrackPanel::DrawOutsideOfTrack(Track * t, wxDC * dc, const wxRect & r)
 {
    // Fill in area outside of the track
    AColor::TrackPanelBackground(dc, false);
@@ -7598,7 +7597,7 @@ void TrackPanel::DrawOutsideOfTrack(Track * t, wxDC * dc, const wxRect r)
 }
 
 /// Draw a three-level highlight gradient around the focused track.
-void TrackPanel::HighlightFocusedTrack(wxDC * dc, const wxRect r)
+void TrackPanel::HighlightFocusedTrack(wxDC * dc, const wxRect & r)
 {
    wxRect rect = r;
    rect.x += kLeftInset;
@@ -7892,6 +7891,38 @@ void TrackPanel::OnNextTrack( bool shift )
          return;
       }
    }
+}
+
+void TrackPanel::OnFirstTrack()
+{
+   Track *t = GetFocusedTrack();
+   if (!t)
+      return;
+
+   TrackListIterator iter(mTracks);
+   Track *f = iter.First();
+   if (t != f)
+   {
+      SetFocusedTrack(f);
+      MakeParentModifyState(false);
+   }
+   EnsureVisible(f);
+}
+
+void TrackPanel::OnLastTrack()
+{
+   Track *t = GetFocusedTrack();
+   if (!t)
+      return;
+
+   TrackListIterator iter(mTracks);
+   Track *l = iter.Last();
+   if (t != l)
+   {
+      SetFocusedTrack(l);
+      MakeParentModifyState(false);
+   }
+   EnsureVisible(l);
 }
 
 void TrackPanel::OnToggle()
@@ -8394,9 +8425,20 @@ void TrackPanel::OnTrackMenu(Track *t)
       theMenu->Enable(OnMergeStereoID, canMakeStereo);
       theMenu->Enable(OnSplitStereoID, t->GetLinked());
       theMenu->Enable(OnSplitStereoMonoID, t->GetLinked());
-      theMenu->Check(OnChannelMonoID, t->GetChannel() == Track::MonoChannel);
-      theMenu->Check(OnChannelLeftID, t->GetChannel() == Track::LeftChannel);
-      theMenu->Check(OnChannelRightID, t->GetChannel() == Track::RightChannel);
+
+      // We only need to set check marks. Clearing checks causes problems on Linux (bug 851)
+      int channels = t->GetChannel();
+      switch (t->GetChannel()) {
+      case Track::LeftChannel:
+         theMenu->Check(OnChannelLeftID, true);
+         break;
+      case Track::RightChannel:
+         theMenu->Check(OnChannelRightID, true);
+         break;
+      default:
+         theMenu->Check(OnChannelMonoID, true);
+      }
+
       theMenu->Enable(OnChannelMonoID, !t->GetLinked());
       theMenu->Enable(OnChannelLeftID, !t->GetLinked());
       theMenu->Enable(OnChannelRightID, !t->GetLinked());
@@ -8528,6 +8570,30 @@ void TrackPanel::OnTrackClose()
    Refresh( false );
 }
 
+void TrackPanel::OnTrackMoveUp()
+{
+   if (mTracks->CanMoveUp(GetFocusedTrack()))
+      MoveTrack(GetFocusedTrack(), OnMoveUpID);
+}
+
+void TrackPanel::OnTrackMoveDown()
+{
+   if (mTracks->CanMoveDown(GetFocusedTrack()))
+      MoveTrack(GetFocusedTrack(), OnMoveDownID);
+}
+
+void TrackPanel::OnTrackMoveTop()
+{
+   if (mTracks->CanMoveUp(GetFocusedTrack()))
+      MoveTrack(GetFocusedTrack(), OnMoveTopID);
+}
+
+void TrackPanel::OnTrackMoveBottom()
+{
+   if (mTracks->CanMoveDown(GetFocusedTrack()))
+      MoveTrack(GetFocusedTrack(), OnMoveBottomID);
+}
+
 
 Track * TrackPanel::GetFirstSelectedTrack()
 {
@@ -8607,7 +8673,7 @@ void TrackPanel::EnsureVisible(Track * t)
 }
 
 void TrackPanel::DrawBordersAroundTrack(Track * t, wxDC * dc,
-                                        const wxRect r, const int vrul,
+                                        const wxRect & r, const int vrul,
                                         const int labelw)
 {
    // Border around track and label area
@@ -8634,7 +8700,7 @@ void TrackPanel::DrawBordersAroundTrack(Track * t, wxDC * dc,
 #endif
 }
 
-void TrackPanel::DrawShadow(Track * /* t */ , wxDC * dc, const wxRect r)
+void TrackPanel::DrawShadow(Track * /* t */ , wxDC * dc, const wxRect & r)
 {
    int right = r.x + r.width - 1;
    int bottom = r.y + r.height - 1;
@@ -8963,7 +9029,7 @@ int TrackPanel::IdOfFormat( int format )
    return OnFloatID;// Compiler food.
 }
 
-/// Puts a check mark at a given position in a menu, clearing all other check marks.
+/// Puts a check mark at a given position in a menu.
 void TrackPanel::SetMenuCheck( wxMenu & menu, int newId )
 {
    wxMenuItemList & list = menu.GetMenuItems();
@@ -8974,7 +9040,9 @@ void TrackPanel::SetMenuCheck( wxMenu & menu, int newId )
    {
       item = node->GetData();
       id = item->GetId();
-      menu.Check( id, id==newId );
+      // We only need to set check marks. Clearing checks causes problems on Linux (bug 851)
+      if (id==newId)
+         menu.Check( id, true );
    }
 }
 
@@ -9159,24 +9227,30 @@ void TrackPanel::OnTimeTrackLogInt(wxCommandEvent & /*event*/)
 }
 
 /// Move a track up, down, to top or to bottom.
-void TrackPanel::OnMoveTrack(wxCommandEvent & event)
+
+void TrackPanel::OnMoveTrack(wxCommandEvent &event)
 {
    wxASSERT(event.GetId() == OnMoveUpID || event.GetId() == OnMoveDownID ||
             event.GetId() == OnMoveTopID || event.GetId() == OnMoveBottomID);
 
+   MoveTrack( mPopupMenuTarget, event.GetId() );
+}
+
+void TrackPanel::MoveTrack( Track* target, int eventId )
+{
    wxString direction;
 
-   switch (event.GetId())
+   switch (eventId)
    {
    case OnMoveTopID :
       /* i18n-hint: where the track is moving to.*/
       direction = _("to Top");
 
-      while (mTracks->CanMoveUp(mPopupMenuTarget)) {
-         if (mTracks->Move(mPopupMenuTarget, true)) {
+      while (mTracks->CanMoveUp(target)) {
+         if (mTracks->Move(target, true)) {
             MixerBoard* pMixerBoard = this->GetMixerBoard(); // Update mixer board.
-            if (pMixerBoard && (mPopupMenuTarget->GetKind() == Track::Wave))
-               pMixerBoard->MoveTrackCluster((WaveTrack*)mPopupMenuTarget, true);
+            if (pMixerBoard && (target->GetKind() == Track::Wave))
+               pMixerBoard->MoveTrackCluster((WaveTrack*)target, true);
          }
       }
       break;
@@ -9184,23 +9258,23 @@ void TrackPanel::OnMoveTrack(wxCommandEvent & event)
       /* i18n-hint: where the track is moving to.*/
       direction = _("to Bottom");
 
-      while (mTracks->CanMoveDown(mPopupMenuTarget)) {
-         if (mTracks->Move(mPopupMenuTarget, false)) {
+      while (mTracks->CanMoveDown(target)) {
+         if (mTracks->Move(target, false)) {
             MixerBoard* pMixerBoard = this->GetMixerBoard(); // Update mixer board.
-            if (pMixerBoard && (mPopupMenuTarget->GetKind() == Track::Wave))
-               pMixerBoard->MoveTrackCluster((WaveTrack*)mPopupMenuTarget, false);
+            if (pMixerBoard && (target->GetKind() == Track::Wave))
+               pMixerBoard->MoveTrackCluster((WaveTrack*)target, false);
          }
       }
       break;
    default:
-      bool bUp = (OnMoveUpID == event.GetId());
+      bool bUp = (OnMoveUpID == eventId);
       /* i18n-hint: a direction.*/
       direction = bUp ? _("Up") : _("Down");
 
-      if (mTracks->Move(mPopupMenuTarget, bUp)) {
+      if (mTracks->Move(target, bUp)) {
          MixerBoard* pMixerBoard = this->GetMixerBoard();
-         if (pMixerBoard && (mPopupMenuTarget->GetKind() == Track::Wave)) {
-            pMixerBoard->MoveTrackCluster((WaveTrack*)mPopupMenuTarget, bUp);
+         if (pMixerBoard && (target->GetKind() == Track::Wave)) {
+            pMixerBoard->MoveTrackCluster((WaveTrack*)target, bUp);
          }
       }
    }
@@ -9211,7 +9285,7 @@ void TrackPanel::OnMoveTrack(wxCommandEvent & event)
    wxString shortDesc = (_("Move Track"));
 
    longDesc = (wxString::Format(wxT("%s '%s' %s"), longDesc.c_str(),
-                                mPopupMenuTarget->GetName().c_str(), direction.c_str()));
+                                target->GetName().c_str(), direction.c_str()));
    shortDesc = (wxString::Format(wxT("%s %s"), shortDesc.c_str(), direction.c_str()));
 
    MakeParentPushState(longDesc, shortDesc);
@@ -9722,7 +9796,7 @@ int TrackInfo::GetTrackInfoWidth() const
    return kTrackInfoWidth;
 }
 
-void TrackInfo::GetCloseBoxRect(const wxRect r, wxRect & dest) const
+void TrackInfo::GetCloseBoxRect(const wxRect & r, wxRect & dest) const
 {
    dest.x = r.x;
    dest.y = r.y;
@@ -9730,7 +9804,7 @@ void TrackInfo::GetCloseBoxRect(const wxRect r, wxRect & dest) const
    dest.height = kTrackInfoBtnSize;
 }
 
-void TrackInfo::GetTitleBarRect(const wxRect r, wxRect & dest) const
+void TrackInfo::GetTitleBarRect(const wxRect & r, wxRect & dest) const
 {
    dest.x = r.x + kTrackInfoBtnSize; // to right of CloseBoxRect
    dest.y = r.y;
@@ -9738,7 +9812,7 @@ void TrackInfo::GetTitleBarRect(const wxRect r, wxRect & dest) const
    dest.height = kTrackInfoBtnSize;
 }
 
-void TrackInfo::GetMuteSoloRect(const wxRect r, wxRect & dest, bool solo, bool bHasSoloButton) const
+void TrackInfo::GetMuteSoloRect(const wxRect & r, wxRect & dest, bool solo, bool bHasSoloButton) const
 {
    dest.x = r.x ;
    dest.y = r.y + 50;
@@ -9755,7 +9829,7 @@ void TrackInfo::GetMuteSoloRect(const wxRect r, wxRect & dest, bool solo, bool b
    }
 }
 
-void TrackInfo::GetGainRect(const wxRect r, wxRect & dest) const
+void TrackInfo::GetGainRect(const wxRect & r, wxRect & dest) const
 {
    dest.x = r.x + 7;
    dest.y = r.y + 70;
@@ -9763,7 +9837,7 @@ void TrackInfo::GetGainRect(const wxRect r, wxRect & dest) const
    dest.height = 25;
 }
 
-void TrackInfo::GetPanRect(const wxRect r, wxRect & dest) const
+void TrackInfo::GetPanRect(const wxRect & r, wxRect & dest) const
 {
    dest.x = r.x + 7;
    dest.y = r.y + 100;
@@ -9771,7 +9845,7 @@ void TrackInfo::GetPanRect(const wxRect r, wxRect & dest) const
    dest.height = 25;
 }
 
-void TrackInfo::GetMinimizeRect(const wxRect r, wxRect &dest) const
+void TrackInfo::GetMinimizeRect(const wxRect & r, wxRect &dest) const
 {
    const int kBlankWidth = kTrackInfoBtnSize + 4;
    dest.x = r.x + kBlankWidth;
@@ -9781,7 +9855,7 @@ void TrackInfo::GetMinimizeRect(const wxRect r, wxRect &dest) const
    dest.height = kTrackInfoBtnSize;
 }
 
-void TrackInfo::GetSyncLockIconRect(const wxRect r, wxRect &dest) const
+void TrackInfo::GetSyncLockIconRect(const wxRect & r, wxRect &dest) const
 {
    dest.x = r.x + kTrackInfoWidth - kTrackInfoBtnSize - 4; // to right of minimize button
    dest.y = r.y + r.height - 19;
@@ -9796,7 +9870,7 @@ void TrackInfo::SetTrackInfoFont(wxDC * dc)
    dc->SetFont(mFont);
 }
 
-void TrackInfo::DrawBordersWithin(wxDC* dc, const wxRect r, bool bHasMuteSolo)
+void TrackInfo::DrawBordersWithin(wxDC* dc, const wxRect & r, bool bHasMuteSolo)
 {
    AColor::Dark(dc, false); // same color as border of toolbars (ToolBar::OnPaint())
 
@@ -9822,7 +9896,7 @@ void TrackInfo::DrawBordersWithin(wxDC* dc, const wxRect r, bool bHasMuteSolo)
                   minimizeRect.x + minimizeRect.width, minimizeRect.y - 1);
 }
 
-void TrackInfo::DrawBackground(wxDC * dc, const wxRect r, bool bSelected,
+void TrackInfo::DrawBackground(wxDC * dc, const wxRect & r, bool bSelected,
    bool WXUNUSED(bHasMuteSolo), const int labelw, const int WXUNUSED(vrul))
 {
    // fill in label
@@ -9847,7 +9921,7 @@ void TrackInfo::DrawBackground(wxDC * dc, const wxRect r, bool bSelected,
    //}
 }
 
-void TrackInfo::GetTrackControlsRect(const wxRect r, wxRect & dest) const
+void TrackInfo::GetTrackControlsRect(const wxRect & r, wxRect & dest) const
 {
    wxRect top;
    wxRect bot;
@@ -9862,7 +9936,7 @@ void TrackInfo::GetTrackControlsRect(const wxRect r, wxRect & dest) const
 }
 
 
-void TrackInfo::DrawCloseBox(wxDC * dc, const wxRect r, bool down)
+void TrackInfo::DrawCloseBox(wxDC * dc, const wxRect & r, bool down)
 {
    wxRect bev;
    GetCloseBoxRect(r, bev);
@@ -9891,7 +9965,7 @@ void TrackInfo::DrawCloseBox(wxDC * dc, const wxRect r, bool down)
    AColor::BevelTrackInfo(*dc, !down, bev);
 }
 
-void TrackInfo::DrawTitleBar(wxDC * dc, const wxRect r, Track * t,
+void TrackInfo::DrawTitleBar(wxDC * dc, const wxRect & r, Track * t,
                               bool down)
 {
    wxRect bev;
@@ -9937,7 +10011,7 @@ void TrackInfo::DrawTitleBar(wxDC * dc, const wxRect r, Track * t,
 }
 
 /// Draw the Mute or the Solo button, depending on the value of solo.
-void TrackInfo::DrawMuteSolo(wxDC * dc, const wxRect r, Track * t,
+void TrackInfo::DrawMuteSolo(wxDC * dc, const wxRect & r, Track * t,
                               bool down, bool solo, bool bHasSoloButton)
 {
    wxRect bev;
@@ -9990,7 +10064,7 @@ void TrackInfo::DrawMuteSolo(wxDC * dc, const wxRect r, Track * t,
 }
 
 // Draw the minimize button *and* the sync-lock track icon, if necessary.
-void TrackInfo::DrawMinimize(wxDC * dc, const wxRect r, Track * t, bool down)
+void TrackInfo::DrawMinimize(wxDC * dc, const wxRect & r, Track * t, bool down)
 {
    wxRect bev;
    GetMinimizeRect(r, bev);

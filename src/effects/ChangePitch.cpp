@@ -136,9 +136,14 @@ bool EffectChangePitch::SetAutomationParameters(EffectAutomationParameters & par
 
    m_dPercentChange = Percentage;
 
-   m_dSemitonesChange = (12.0 * log((100.0 + m_dPercentChange) / 100.0)) / log(2.0);
-
    return true;
+}
+
+bool EffectChangePitch::LoadFactoryDefaults()
+{
+   DeduceFrequencies();
+
+   return Effect::LoadFactoryDefaults();
 }
 
 // Effect implementation
@@ -175,20 +180,6 @@ bool EffectChangePitch::CheckWhetherSkipEffect()
 void EffectChangePitch::PopulateOrExchange(ShuttleGui & S)
 {
    DeduceFrequencies(); // Set frequency-related control values based on sample.
-
-   // effect parameters
-   double dFromMIDInote = FreqToMIDInote(m_dStartFrequency);
-   double dToMIDInote = dFromMIDInote + m_dSemitonesChange;
-   m_nFromPitch = PitchIndex(dFromMIDInote);
-   m_nFromOctave = PitchOctave(dFromMIDInote);
-   m_nToPitch = PitchIndex(dToMIDInote);
-   m_nToOctave = PitchOctave(dToMIDInote);
-
-   m_dSemitonesChange = m_dSemitonesChange;
-
-   m_FromFrequency = m_dStartFrequency;
-   Calc_PercentChange();
-   Calc_ToFrequency();
 
    wxArrayString pitch;
    pitch.Add(wxT("C"));
@@ -307,13 +298,19 @@ bool EffectChangePitch::TransferDataToWindow()
       return false;
    }
 
-   // from/to pitch controls
-   m_pChoice_FromPitch->SetSelection(m_nFromPitch);
-   m_pSpin_FromOctave->SetValue(m_nFromOctave);
-   Update_Choice_ToPitch();
-   Update_Spin_ToOctave();
+   Calc_SemitonesChange_fromPercentChange();
+   Calc_ToPitch(); // Call *after* m_dSemitonesChange is updated.
+   Calc_ToFrequency();
+   Calc_ToOctave(); // Call after Calc_ToFrequency().
 
-   // percent change controls
+   Update_Choice_FromPitch();
+   Update_Choice_ToPitch();
+   Update_Spin_FromOctave();
+   Update_Spin_ToOctave();
+   Update_Text_SemitonesChange();
+   Update_Text_FromFrequency();
+   Update_Text_ToFrequency();
+   Update_Text_PercentChange();
    Update_Slider_PercentChange();
 
    m_bLoopDetect = false;
@@ -405,6 +402,17 @@ void EffectChangePitch::DeduceFrequencies()
       lag = (windowSize/2 - 1) - argmax;
       m_dStartFrequency = rate / lag;
    }
+
+   double dFromMIDInote = FreqToMIDInote(m_dStartFrequency);
+   double dToMIDInote = dFromMIDInote + m_dSemitonesChange;
+   m_nFromPitch = PitchIndex(dFromMIDInote);
+   m_nFromOctave = PitchOctave(dFromMIDInote);
+   m_nToPitch = PitchIndex(dToMIDInote);
+   m_nToOctave = PitchOctave(dToMIDInote);
+
+   m_FromFrequency = m_dStartFrequency;
+   Calc_PercentChange();
+   Calc_ToFrequency();
 }
 
 // calculations
@@ -742,7 +750,6 @@ void EffectChangePitch::Update_Text_ToFrequency()
 {
    m_pTextCtrl_ToFrequency->GetValidator()->TransferToWindow();
 }
-
 
 void EffectChangePitch::Update_Text_PercentChange()
 {
