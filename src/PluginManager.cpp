@@ -535,7 +535,7 @@ void PluginRegistrationDialog::PopulateOrExchange(ShuttleGui &S)
          }
          S.EndHorizontalLay();
 
-         S.StartHorizontalLay(wxALIGN_CENTER | wxEXPAND);
+         S.StartHorizontalLay( wxEXPAND); // remove wxALIGN_CENTER |
          {
             S.AddSpace(1);
          }
