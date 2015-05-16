@@ -10,7 +10,7 @@
 *******************************************************************//**
 
 \class EffectAmplify
-\brief An Effect
+\brief An Effect that makes a sound louder or softer.
 
   This rewritten class supports a smart Amplify effect - it calculates
   the maximum amount of gain that can be applied to all tracks without
@@ -66,6 +66,8 @@ EffectAmplify::EffectAmplify()
    mRatio = powf(10.0f, mAmp / 20.0f);
    mCanClip = false;
    mPeak = 0.0f;
+
+   SetLinearEffectFlag(true);
 }
 
 EffectAmplify::~EffectAmplify()
@@ -153,6 +155,17 @@ bool EffectAmplify::Init()
    return true;
 }
 
+void EffectAmplify::Preview(bool dryOnly)
+{
+   float ratio = mRatio;
+   float peak = mPeak;
+
+   Effect::Preview(dryOnly);
+
+   mRatio = ratio;
+   mPeak = peak;
+}
+
 void EffectAmplify::PopulateOrExchange(ShuttleGui & S)
 {
    if (IsBatchProcessing())
@@ -163,14 +176,13 @@ void EffectAmplify::PopulateOrExchange(ShuttleGui & S)
    {
       if (mPeak > 0.0)
       {
-         mRatio = 1.0 / mPeak;
+         mRatio = 1.0f / mPeak;
       }
       else
       {
          mRatio = 1.0;
       }
    }
-
 
    S.AddSpace(0, 5);
 
@@ -226,9 +238,10 @@ void EffectAmplify::PopulateOrExchange(ShuttleGui & S)
 bool EffectAmplify::TransferDataToWindow()
 {
    // limit range of gain
-   float dB = TrapFloat(20.0f * log10f(mRatio) * SCL_Amp, MIN_Amp * SCL_Amp, MAX_Amp * SCL_Amp) / SCL_Amp;
-
-   mRatio = powf(10.0f, dB / 20.0f);
+   float dBInit = 20.0f*log10f(mRatio);
+   float dB = TrapFloat(dBInit, MIN_Amp, MAX_Amp);
+   if (dB != dBInit)
+      mRatio = powf(10.0f, dB / 20.0f);
 
    mAmp = 20.0f * log10f(mRatio);
    mAmpT->GetValidator()->TransferToWindow();
@@ -268,8 +281,12 @@ bool EffectAmplify::TransferDataFromWindow()
 
 void EffectAmplify::CheckClip()
 {
-   float peak = mRatio * mPeak;
-   EnableApply(mClip->GetValue() || (peak > 0.0f && peak <= 1.0f));
+   // On Linux (not tested other platforms), 1.0f/mPeak is calculated at higher precision
+   // than the (float) value of mRatio, that is, the value is rounded in mRatio = 1/mPeak,
+   // so there is no guarantee that mRatio == 1/mPeak. To test for equality, assign the value
+   // of 1/mPeak to a float rather than directly comparing mRatio <= 1.0f/mPeak
+   float peakInv = 1.0f/mPeak;
+   EnableApply(mClip->GetValue() || (mPeak > 0.0f && mRatio <= peakInv));
 }
 
 void EffectAmplify::OnAmpText(wxCommandEvent & WXUNUSED(evt))
@@ -298,10 +315,12 @@ void EffectAmplify::OnPeakText(wxCommandEvent & WXUNUSED(evt))
       return;
    }
 
-   float r = powf(10.0f, mNewPeak / 20.0f) / mPeak;
+   mRatio = powf(10.0f, mNewPeak / 20.0f) / mPeak;
 
-   mAmp = TrapFloat(20.0f * log10f(r) * SCL_Amp, MIN_Amp * SCL_Amp, MAX_Amp * SCL_Amp) / SCL_Amp;
-   mRatio = powf(10.0f, mAmp / 20.0f);
+   float ampInit = 20.0f * log10f(mRatio);
+   mAmp = TrapFloat(ampInit, MIN_Amp, MAX_Amp);
+   if (mAmp != ampInit)
+      mRatio = powf(10.0f, mAmp / 20.0f);
 
    mAmpT->GetValidator()->TransferToWindow();
 

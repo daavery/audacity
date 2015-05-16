@@ -79,6 +79,7 @@ class AUDACITY_DLL_API Effect : public wxEvtHandler,
    virtual bool IsLegacy();
    virtual bool SupportsRealtime();
    virtual bool SupportsAutomation();
+   virtual bool EnableFromGetGo(){ return true;};
 
    // EffectClientInterface implementation
 
@@ -315,6 +316,16 @@ protected:
    void SetTimeWarper(TimeWarper *warper);
    TimeWarper *GetTimeWarper();
 
+   // Previewing linear effect can be optimised by pre-mixing. However this
+   // should not be used for non-linear effects such as dynamic processors
+   // To allow pre-mixing before Preview, set linearEffectFlag to true.
+   void SetLinearEffectFlag(bool linearEffectFlag);
+
+   // Most effects only require selected tracks to be copied for Preview.
+   // If IncludeNotSelectedPreviewTracks(true), then non-linear effects have
+   // preview copies of all wave tracks.
+   void IncludeNotSelectedPreviewTracks(bool includeNotSelected);
+
    // Use these two methods to copy the input tracks to mOutputTracks, if
    // doing the processing on them, and replacing the originals only on success (and not cancel).
    void CopyInputTracks(int trackType = Track::Wave);
@@ -387,7 +398,12 @@ private:
 
    bool mIsBatch;
 
+   bool mIsLinearEffect;
+   bool mPreviewWithNotSelected;
+
    double mDuration;
+   // mSetDuration should ONLY be set when SetDuration() is called.
+   double mSetDuration;
 
    bool mUIDebug;
 

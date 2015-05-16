@@ -20,6 +20,7 @@
 #include <wx/defs.h>
 #include <wx/dialog.h>
 #include <wx/dir.h>
+#include <wx/display.h>
 #include <wx/dynarray.h>
 #include <wx/dynlib.h>
 #include <wx/hashmap.h>
@@ -32,6 +33,7 @@
 #include <wx/string.h>
 #include <wx/tokenzr.h>
 #include <wx/wfstream.h>
+#include <wx/radiobut.h>
 
 #include "audacity/EffectInterface.h"
 
@@ -392,13 +394,14 @@ class PluginRegistrationDialog : public wxDialog
 {
 public:
    // constructors and destructors
-   PluginRegistrationDialog(ProviderMap & map);
+   PluginRegistrationDialog(ProviderMap & map, EffectType TypeIn);
    virtual ~PluginRegistrationDialog();
-   void RegisterDefaultEffects();
 
 private:
    void Populate();
    void PopulateOrExchange(ShuttleGui & S);
+   void RegenerateEffectsList( int iShowWhat );
+
 
    void OnOK(wxCommandEvent & evt);
    void OnCancel(wxCommandEvent & evt);
@@ -406,6 +409,7 @@ private:
    void OnListMouseDown(wxMouseEvent & evt);
    void OnSelectAll(wxCommandEvent & evt);
    void OnClearAll(wxCommandEvent & evt);
+   void OnChangedVisibility(wxCommandEvent & evt);
 
    void SetBoldOrRegular(int i);
    void SetState(int i, int state);
@@ -413,6 +417,7 @@ private:
 
 private:
    ModuleInterface *mMod;
+   EffectType mType;
 
 #if wxUSE_ACCESSIBILITY
    CheckListAx *mAx;
@@ -420,8 +425,12 @@ private:
 
    wxListCtrl *mEffects;
    PluginIDList mProvs;
-   wxArrayString mPaths;
+   wxArrayString mPathsInCategory;
    wxArrayInt miState;
+
+   wxArrayString mTickList;       // Effects currently ticked
+   wxArrayString mRegisteredList; // Effects currently in menus.
+
 
    bool mCancelClicked;
 
@@ -430,20 +439,30 @@ private:
    DECLARE_EVENT_TABLE()
 };
 
+enum {
+   ID_ShowAll = 1000,
+   ID_ShowRegistered,
+   ID_ShowUnregistered
+};
+
 BEGIN_EVENT_TABLE(PluginRegistrationDialog, wxDialog)
    EVT_BUTTON(wxID_OK, PluginRegistrationDialog::OnOK)
    EVT_BUTTON(wxID_CANCEL, PluginRegistrationDialog::OnCancel)
    EVT_BUTTON(EffectClearAllID, PluginRegistrationDialog::OnClearAll)
    EVT_BUTTON(EffectSelectAllID, PluginRegistrationDialog::OnSelectAll)
+   EVT_RADIOBUTTON(ID_ShowAll, PluginRegistrationDialog::OnChangedVisibility )
+   EVT_RADIOBUTTON(ID_ShowUnregistered, PluginRegistrationDialog::OnChangedVisibility )
+   EVT_RADIOBUTTON(ID_ShowRegistered, PluginRegistrationDialog::OnChangedVisibility )
 END_EVENT_TABLE()
 
-PluginRegistrationDialog::PluginRegistrationDialog(ProviderMap & map)
+PluginRegistrationDialog::PluginRegistrationDialog(ProviderMap & map, EffectType TypeIn)
 :  wxDialog(wxGetApp().GetTopWindow(),
             wxID_ANY,
             _("Register Effects"),
             wxDefaultPosition, wxDefaultSize,
             wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER),
-   mMap(map)            
+   mMap(map),
+   mType(TypeIn)
 {
    mEffects = NULL;
    SetLabel(_("Register Effects"));         // Provide visual label
@@ -501,8 +520,25 @@ void PluginRegistrationDialog::PopulateOrExchange(ShuttleGui &S)
    {
       /*i18n-hint: The dialog shows a list of plugins with check-boxes 
        beside each one.*/
-      S.StartStatic(_("&Select Plug-ins to Install or press ENTER to Install All"), true);
+      S.StartStatic(_("Select Plugins then press ENTER to Install"), true);
       {
+         S.StartHorizontalLay(wxALIGN_LEFT,0 );
+         {
+            wxRadioButton* rb;
+            /* i18n-hint: This is before radio buttons selecting which effects to show */
+            S.AddPrompt(_("Show:"));
+            /* i18n-hint: Radio button to show all effects */
+            rb = S.Id(ID_ShowAll).AddRadioButton(_("&All"));
+            rb->SetName(_("Show all"));
+            /* i18n-hint: Radio button to show just the currently unregistered effects */
+            rb = S.Id(ID_ShowUnregistered).AddRadioButtonToGroup(_("&Unregistered"));
+            rb->SetName(_("Show unregistered"));
+            /* i18n-hint: Radio button to show just the currently registered effects */
+            rb = S.Id(ID_ShowRegistered).AddRadioButtonToGroup(_("&Registered"));
+            rb->SetName(_("Show registered"));
+         }
+         S.EndHorizontalLay();
+
          S.SetStyle(wxSUNKEN_BORDER | wxLC_REPORT | wxLC_SINGLE_SEL | wxLC_HRULES | wxLC_VRULES );
          mEffects = S.Id(EffectListID).AddListControlReportMode();
          mEffects->Connect(wxEVT_LEFT_DOWN,
@@ -530,8 +566,8 @@ void PluginRegistrationDialog::PopulateOrExchange(ShuttleGui &S)
          {
             S.AddSpace(12);
             S.SetBorder(6);
-            S.Id(EffectSelectAllID).AddButton(_("Select &All"));
-            S.Id(EffectClearAllID).AddButton(_("Clea&r All"));
+            S.Id(EffectSelectAllID).AddButton(_("&Select All"));
+            S.Id(EffectClearAllID).AddButton(_("Cl&ear All"));
          }
          S.EndHorizontalLay();
 
@@ -547,6 +583,65 @@ void PluginRegistrationDialog::PopulateOrExchange(ShuttleGui &S)
    }
    S.EndVerticalLay();
 
+   PluginManager & pm = PluginManager::Get();
+
+   mPathsInCategory.Clear();
+
+   // Add ALL plug ins...
+   for (ProviderMap::iterator iter = mMap.begin(); iter != mMap.end(); ++iter)
+   {
+      wxString path = iter->first;
+      mPathsInCategory.Add( path );
+   }
+
+   // Get the list of enabled plugins.
+   // We'll take away ones which we know have the wrong type.
+
+   // This iteration is confusing, becuase registered effects appear twice, 
+   // once as generics (unloaded) with no type and once, if they have been loaded,
+   // with their actual correct types.
+   PluginMap::iterator iter2 = pm.mPlugins.begin();
+   while (iter2 != pm.mPlugins.end())
+   {
+      PluginDescriptor & plug = iter2->second;
+      EffectType Type=plug.GetEffectType();
+      if( Type == mType )
+      {
+         // Initially all the registered menu items are ticked.
+         // So Ticklist and Registered list are the same.
+         if( plug.IsEnabled() )
+         {
+            mTickList.Add( plug.GetPath());
+            mRegisteredList.Add( plug.GetPath()); 
+         }
+      }
+      else if( Type != EffectTypeNone )
+      {
+         // Remove any that we know are the wrong type.
+         int ix = mPathsInCategory.Index( plug.GetPath() );
+         if( ix != wxNOT_FOUND )
+         {
+            mPathsInCategory.RemoveAt( ix );
+         }
+      }
+      iter2++;
+   };
+   RegenerateEffectsList( ID_ShowAll );
+
+   Layout();
+   Fit();
+   wxRect r = wxGetClientDisplayRect();
+   wxSize sz = GetSize();
+   sz.SetWidth(wxMin(sz.GetWidth(), r.GetWidth()));
+   sz.SetHeight(wxMin(sz.GetHeight(), r.GetHeight()));
+   SetMinSize(sz);
+   // Parent window is usually not there yet, so centre on screen rather than on parent.
+   CenterOnScreen();
+
+}
+
+void PluginRegistrationDialog::RegenerateEffectsList( int iShowWhat )
+{
    // The dc is used to compute the text width in pixels.
    // FIXME: That works fine for PC, but apparently comes out too small for wxMAC.
    // iLen is minimum width in pixels shown for the file names.  200 is reasonable.
@@ -555,26 +650,41 @@ void PluginRegistrationDialog::PopulateOrExchange(ShuttleGui &S)
    int x, y;
    wxRect iconrect;
 
+   //PluginManager & pm = PluginManager::Get();
+
+   miState.Clear();
+   mEffects->DeleteAllItems();
    int i = 0;
-   for (ProviderMap::iterator iter = mMap.begin(); iter != mMap.end(); ++iter, i++)
+   for (ProviderMap::iterator iter = mMap.begin(); iter != mMap.end(); ++iter)
    {
-      miState.Add( SHOW_CHECKED );
 
       wxFileName fname = iter->first;
       wxString name = fname.GetName();
       wxString path = iter->first;
 
-      mEffects->InsertItem(i, name, SHOW_CHECKED);
+      if( mPathsInCategory.Index( path ) == wxNOT_FOUND )
+         continue;
+
+      if( mRegisteredList.Index( path ) == wxNOT_FOUND ){
+         if( iShowWhat == ID_ShowRegistered )
+            continue;
+      } else {
+         if( iShowWhat == ID_ShowUnregistered )
+            continue;
+      }
+
+      miState.Add( SHOW_UNCHECKED);
+
+      bool bTicked = mTickList.Index( path ) != wxNOT_FOUND;
+      mEffects->InsertItem(i, name, bTicked? SHOW_CHECKED:SHOW_UNCHECKED);
       mEffects->SetItemPtrData(i, (wxUIntPtr) new wxString(name));
       mEffects->SetItem(i, COL_PATH, path);
 
       // Only need to get the icon width once 
       if (i == 0)
       {
-#if defined(__WXMAC__)
-         // wxMac doesn't return the ICON rectangle.  It returns the
-         // rectangle for the first column and that even comes back
-         // with negative numbers sometimes.
+#if defined(__WXMAC__) || defined(__WXGTK__)
+         // wxMac and wxGtk do not return a valid width.
          // 
          // So, just guess.
          wxIcon i1(unchecked_xpm);
@@ -590,15 +700,33 @@ void PluginRegistrationDialog::PopulateOrExchange(ShuttleGui &S)
       iNameLen = wxMax(iNameLen, x + iconrect.width + (iconrect.x * 2));
       mEffects->GetTextExtent(path, &x, &y );
       iPathLen = wxMax(iPathLen, x + iconrect.width + (iconrect.x * 2));
+      i++;
    }
 
+#if defined(__WXGTK__)
+   // Keep dialog from getting too wide
+   wxDisplay d(wxDisplay::GetFromWindow(GetParent()));
+   int w = d.GetGeometry().GetWidth() - 100;
+   iNameLen = wxMin(iNameLen, w);
+   iPathLen = wxMin(iPathLen, w - iNameLen);
+#endif
+
    mEffects->SortItems(SortCompare, 0);
+   for(i=0;i<mEffects->GetItemCount();i++)
+   {
+      wxListItem item;
+      item.SetId( i );
+      item.SetMask( wxLIST_MASK_IMAGE );
+      mEffects->GetItem( item );
+      if( item.GetImage() != 0 )
+         miState[ i ] = SHOW_CHECKED;
+   }
 
    mEffects->SetColumnWidth(COL_NAME, iNameLen + /* fudge */ 5);
    mEffects->SetColumnWidth(COL_PATH, iPathLen + /* fudge */ 5);
 
    mEffects->SetSizeHints(iNameLen + iPathLen + /* fudge */ 15, 200);
-   if (mPaths.size() > 0)
+   if (mEffects->GetItemCount() > 0)
    {
       // Make sure first item is selected/focused.
       mEffects->SetFocus();
@@ -607,16 +735,6 @@ void PluginRegistrationDialog::PopulateOrExchange(ShuttleGui &S)
       mAx->SetSelected(0);
 #endif
    }
-   Layout();
-   Fit();
-   wxRect r = wxGetClientDisplayRect();
-   wxSize sz = GetSize();
-   sz.SetWidth(wxMin(sz.GetWidth(), r.GetWidth()));
-   sz.SetHeight(wxMin(sz.GetHeight(), r.GetHeight()));
-   SetMinSize(sz);
-   // Parent window is usually not there yet, so centre on screen rather than on parent.
-   CenterOnScreen();
-
 }
 
 void PluginRegistrationDialog::OnListMouseDown(wxMouseEvent & evt)
@@ -686,6 +804,38 @@ void PluginRegistrationDialog::ToggleItem(int i)
    SetState(i, miState[i] == SHOW_CHECKED ? SHOW_UNCHECKED : SHOW_CHECKED);
 }
 
+void PluginRegistrationDialog::OnChangedVisibility(wxCommandEvent & evt)
+{
+   int iShowWhat=evt.GetId();
+
+   // First update mTickList
+   // The effects list may only be showing some of the effects, so it is ONLY
+   // the ones in the list that may need to affect mTickList.
+   wxListItem li;
+   li.Clear();
+   for (int i = 0, cnt = mEffects->GetItemCount(); i < cnt; i++)
+   {
+      mEffects->EnsureVisible(i);
+      li.SetId(i);
+      li.SetColumn(COL_PATH);
+      li.SetMask(wxLIST_MASK_TEXT);
+      mEffects->GetItem(li);
+      wxString path = li.GetText();
+      int ix = mTickList.Index( path );
+      if( miState[i] == SHOW_CHECKED ){
+         if( ix == wxNOT_FOUND )
+            mTickList.Add( path );
+      } else {
+         if( ix != wxNOT_FOUND )
+            mTickList.RemoveAt( ix );
+      }
+   }
+
+   // TickList has been updated.  Go and show the relevant items.
+   RegenerateEffectsList( iShowWhat );
+}
+
+
 void PluginRegistrationDialog::OnSelectAll(wxCommandEvent & WXUNUSED(evt))
 {
    for (size_t i = 0, cnt = miState.size(); i < cnt; i++)
@@ -704,6 +854,11 @@ void PluginRegistrationDialog::OnClearAll(wxCommandEvent & WXUNUSED(evt))
 
 void PluginRegistrationDialog::OnOK(wxCommandEvent & WXUNUSED(evt))
 {
+
+   wxCommandEvent ShowAllEvent;
+   ShowAllEvent.SetId( ID_ShowAll );
+   OnChangedVisibility(ShowAllEvent);
+
    mCancelClicked = false;
    FindWindowById(EffectListID)->Disable();
    FindWindowById(wxID_OK)->Disable();
@@ -713,6 +868,23 @@ void PluginRegistrationDialog::OnOK(wxCommandEvent & WXUNUSED(evt))
 
    PluginManager & pm = PluginManager::Get();
    ModuleManager & mm = ModuleManager::Get();
+   // From here on, if we register an effect we want to enable it.
+   pm.mbRegisterAndEnable = true;
+   
+   // JKC: The following loop disables all the effects, which 
+   // will in turn make them disappear from menus.
+   PluginMap::iterator iter = pm.mPlugins.begin();
+   while (iter != pm.mPlugins.end())
+   {
+      PluginDescriptor & plug = iter->second;
+      wxString path = plug.GetPath();
+      if( mPathsInCategory.Index( path ) != wxNOT_FOUND )
+      {
+         plug.SetEnabled( false ); // clear out all the effects....
+      }
+      iter++;
+   };
+
 
    wxListItem li;
    li.Clear();
@@ -724,6 +896,8 @@ void PluginRegistrationDialog::OnOK(wxCommandEvent & WXUNUSED(evt))
       li.SetMask(wxLIST_MASK_TEXT);
       mEffects->GetItem(li);
       wxString path = li.GetText();
+      if( mPathsInCategory.Index( path ) == wxNOT_FOUND )
+         continue;
 
       // Create a placeholder descriptor to show we've seen this plugin before and not
       // to show it as new the next time Audacity starts.
@@ -745,68 +919,19 @@ void PluginRegistrationDialog::OnOK(wxCommandEvent & WXUNUSED(evt))
          {
             if (mm.RegisterPlugin(providers[j], path))
             {
+               plug = pm.mPlugins[path];
+               plug.SetEnabled( true );
                break;
             }
          }
          mEffects->SetItemImage(i, SHOW_CHECKED);
       }
+
       wxYield();
    }
 
    EndModal(mCancelClicked ? wxID_CANCEL : wxID_OK);
 }
-
-void PluginRegistrationDialog::RegisterDefaultEffects()
-{
-   PluginManager & pm = PluginManager::Get();
-   ModuleManager & mm = ModuleManager::Get();
-
-   int i = 0;
-   for (ProviderMap::iterator iter = mMap.begin(); iter != mMap.end(); ++iter, i++)
-   {
-      wxFileName fname = iter->first;
-      wxString name = fname.GetName();
-      wxString path = iter->first;
-
-      // Create a placeholder descriptor to show we've seen this plugin before and not
-      // to show it as new the next time Audacity starts.
-      //
-      // Placeholder descriptors have a plugin type of PluginTypeNone and the ID is the
-      // path.
-      PluginDescriptor & plug = pm.mPlugins[path];
-
-      plug.SetID(path);
-      plug.SetPath(path);
-      plug.SetEnabled(false);
-      plug.SetValid(false);
-
-      // This is just a proof of concept to show we can get a list of default effects.
-      // Here we take the Builtin ones, and remove several optional ones, so that they become
-      // opt-in.
-      bool bAddIt = fname.GetVolume().StartsWith( wxString( BUILTIN_EFFECT_PREFIX).BeforeFirst(':')  );
-      wxLogDebug(wxT("Name: [%s]"), fname.GetName().c_str() );
-      bAddIt &= !fname.GetName().StartsWith( wxT(" Leveller") );
-      bAddIt &= !fname.GetName().StartsWith( wxT(" Auto Duck") );
-      bAddIt &= !fname.GetName().StartsWith( wxT(" Paulstretch") );
-      bAddIt &= !fname.GetName().StartsWith( wxT(" Time Scale") );
-      bAddIt &= !fname.GetName().StartsWith( wxT(" Classic Filters") );
-
-      // Built in effects get registered...
-      if (bAddIt)
-      {
-         wxArrayString providers = mMap[path];
-         for (size_t j = 0, cnt = providers.GetCount(); j < cnt; j++)
-         {
-            if (mm.RegisterPlugin(providers[j], path))
-            {
-               break;
-            }
-         }
-      }
-      wxYield();
-   }
-}
-
 
 void PluginRegistrationDialog::OnCancel(wxCommandEvent & WXUNUSED(evt))
 {
@@ -906,24 +1031,24 @@ const wxString & PluginDescriptor::GetSymbol() const
    return mSymbol;
 }
 
-wxString PluginDescriptor::GetName() const
+wxString PluginDescriptor::GetName(bool translate) const
 {
-   return wxGetTranslation(mName);
+   return translate ? wxString(wxGetTranslation(mName)) : mName;
 }
 
-wxString PluginDescriptor::GetVersion() const
+wxString PluginDescriptor::GetVersion(bool translate) const
 {
-   return wxGetTranslation(mVersion);
+   return translate ? wxString(wxGetTranslation(mVersion)) : mVersion;
 }
 
-wxString PluginDescriptor::GetVendor() const
+wxString PluginDescriptor::GetVendor(bool translate) const
 {
-   return wxGetTranslation(mVendor);
+   return translate ? wxString(wxGetTranslation(mVendor)) : mVendor;
 }
 
-wxString PluginDescriptor::GetDescription() const
+wxString PluginDescriptor::GetDescription(bool translate) const
 {
-   return wxGetTranslation(mDescription);
+   return translate ? wxString(wxGetTranslation(mDescription)) : mDescription;
 }
 
 bool PluginDescriptor::IsEnabled() const
@@ -1140,6 +1265,16 @@ void PluginDescriptor::SetImporterExtensions(const wxArrayString & extensions)
 //
 // ============================================================================
 
+bool PluginManager::IsPluginRegistered(const PluginID & ID)
+{
+   if (mPlugins.find(ID) == mPlugins.end())
+   {
+      return false;
+   }
+
+   return true;
+}
+
 const PluginID & PluginManager::RegisterPlugin(ModuleInterface *module)
 {
    PluginDescriptor & plug = CreatePlugin(GetID(module), module, PluginTypeModule);
@@ -1163,7 +1298,7 @@ const PluginID & PluginManager::RegisterPlugin(ModuleInterface *provider, Effect
    plug.SetEffectRealtime(effect->SupportsRealtime());
    plug.SetEffectAutomatable(effect->SupportsAutomation());
 
-   plug.SetEnabled(true);
+   plug.SetEnabled(mbRegisterAndEnable | effect->EnableFromGetGo());
    plug.SetValid(true);
 
    return plug.GetID();
@@ -1436,6 +1571,7 @@ PluginManager *PluginManager::mInstance = NULL;
 PluginManager::PluginManager()
 {
    mSettings = NULL;
+   mbRegisterAndEnable = false;
 }
 
 PluginManager::~PluginManager()
@@ -1484,11 +1620,7 @@ void PluginManager::Initialize()
    ModuleManager::Get().DiscoverProviders();
 
    // And finally check for updates
-   // CheckForUpdates will prompt for what to add normally.
-   // If it is told kJUST_STANDARD_EFFECTS then it doesn't prompt.
-#ifdef EXPERIMENTAL_EFFECT_MANAGEMENT
-   CheckForUpdates(kJUST_STANDARD_EFFECTS);
-#else
+#ifndef EXPERIMENTAL_EFFECT_MANAGEMENT
    CheckForUpdates();
 #endif
 }
@@ -1816,10 +1948,10 @@ void PluginManager::SaveGroup(PluginType type)
 
       mRegistry->Write(KEY_PATH, plug.GetPath());
       mRegistry->Write(KEY_SYMBOL, plug.GetSymbol());
-      mRegistry->Write(KEY_NAME, plug.GetName());
-      mRegistry->Write(KEY_VERSION, plug.GetVersion());
-      mRegistry->Write(KEY_VENDOR, plug.GetVendor());
-      mRegistry->Write(KEY_DESCRIPTION, plug.GetDescription());
+      mRegistry->Write(KEY_NAME, plug.GetName(false));
+      mRegistry->Write(KEY_VERSION, plug.GetVersion(false));
+      mRegistry->Write(KEY_VENDOR, plug.GetVendor(false));
+      mRegistry->Write(KEY_DESCRIPTION, plug.GetDescription(false));
       mRegistry->Write(KEY_PROVIDERID, plug.GetProviderID());
       mRegistry->Write(KEY_ENABLED, plug.IsEnabled());
       mRegistry->Write(KEY_VALID, plug.IsValid());
@@ -1881,7 +2013,7 @@ void PluginManager::SaveGroup(PluginType type)
    return;
 }
 
-void PluginManager::CheckForUpdates(eItemsToUpdate UpdateWhat)
+void PluginManager::CheckForUpdates(EffectType UpdateWhat)
 {
    // Get ModuleManager reference
    ModuleManager & mm = ModuleManager::Get();
@@ -1892,7 +2024,11 @@ void PluginManager::CheckForUpdates(eItemsToUpdate UpdateWhat)
    gPrefs->Read(wxT("/Plugins/Rescan"), &doRescan, true);
    gPrefs->Read(wxT("/Plugins/CheckForUpdates"), &doCheck, true);
 
-   if( UpdateWhat == kPROMPT_TO_ADD_EFFECTS )
+   if( UpdateWhat == EffectTypeGenerate )
+      doRescan = true;
+   else if( UpdateWhat == EffectTypeProcess )
+      doRescan = true;
+   else if( UpdateWhat == EffectTypeAnalyze )
       doRescan = true;
 
    ProviderMap map;
@@ -1954,13 +2090,10 @@ void PluginManager::CheckForUpdates(eItemsToUpdate UpdateWhat)
    // Allow the user to choose which ones to enable
    if (map.size() != 0)
    {
-      PluginRegistrationDialog dlg(map);
-      if( UpdateWhat == kJUST_STANDARD_EFFECTS )
-      {
-         dlg.RegisterDefaultEffects();
-         gPrefs->Write(wxT("/Plugins/Rescan"), false);
-      }
-      else if (dlg.ShowModal() == wxID_OK)
+
+      PluginRegistrationDialog dlg(map,UpdateWhat);
+
+      if (dlg.ShowModal() == wxID_OK)
       {
          gPrefs->Write(wxT("/Plugins/Rescan"), false);
       }
@@ -1969,6 +2102,27 @@ void PluginManager::CheckForUpdates(eItemsToUpdate UpdateWhat)
    Save();
 
    return;
+}
+
+// Here solely for the purpose of Nyquist Workbench until
+// a better solution is devised.
+const PluginID & PluginManager::RegisterPlugin(EffectIdentInterface *effect)
+{
+   PluginDescriptor & plug = CreatePlugin(GetID(effect), effect, PluginTypeEffect);
+
+   plug.SetEffectType(effect->GetType());
+   plug.SetEffectFamily(effect->GetFamily());
+   plug.SetEffectInteractive(effect->IsInteractive());
+   plug.SetEffectDefault(effect->IsDefault());
+   plug.SetEffectRealtime(effect->SupportsRealtime());
+   plug.SetEffectAutomatable(effect->SupportsAutomation());
+
+   plug.SetInstance(effect);
+   plug.SetEffectLegacy(true);
+   plug.SetEnabled(true);
+   plug.SetValid(true);
+
+   return plug.GetID();
 }
 
 int PluginManager::GetPluginCount(PluginType type)
@@ -2077,35 +2231,6 @@ const PluginDescriptor *PluginManager::GetNextPluginForEffectType(EffectType typ
    return NULL;
 }
 
-bool PluginManager::IsRegistered(const PluginID & ID)
-{
-   if (mPlugins.find(ID) == mPlugins.end())
-   {
-      return false;
-   }
-
-   return true;
-}
-
-const PluginID & PluginManager::RegisterPlugin(EffectIdentInterface *effect)
-{
-   PluginDescriptor & plug = CreatePlugin(GetID(effect), effect, PluginTypeEffect);
-
-   plug.SetEffectType(effect->GetType());
-   plug.SetEffectFamily(effect->GetFamily());
-   plug.SetEffectInteractive(effect->IsInteractive());
-   plug.SetEffectDefault(effect->IsDefault());
-   plug.SetEffectRealtime(effect->SupportsRealtime());
-   plug.SetEffectAutomatable(effect->SupportsAutomation());
-
-   plug.SetInstance(effect);
-   plug.SetEffectLegacy(true);
-   plug.SetEnabled(true);
-   plug.SetValid(true);
-
-   return plug.GetID();
-}
-
 bool PluginManager::IsPluginEnabled(const PluginID & ID)
 {
    if (mPlugins.find(ID) == mPlugins.end())
@@ -2168,17 +2293,6 @@ IdentInterface *PluginManager::GetInstance(const PluginID & ID)
    }
 
    return plug.GetInstance();
-}
-
-// TODO:  This goes away when all effects have been converted
-void PluginManager::SetInstance(const PluginID & ID, IdentInterface *instance)
-{
-   if (mPlugins.find(ID) == mPlugins.end())
-   {
-      return;
-   }
-
-   return mPlugins[ID].SetInstance(instance);
 }
 
 PluginID PluginManager::GetID(ModuleInterface *module)

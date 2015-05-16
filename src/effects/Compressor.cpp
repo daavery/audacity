@@ -29,6 +29,7 @@
 #include <math.h>
 
 #include <wx/brush.h>
+#include <wx/dcclient.h>
 #include <wx/dcmemory.h>
 #include <wx/intl.h>
 #include <wx/msgdlg.h>
@@ -85,6 +86,8 @@ EffectCompressor::EffectCompressor()
    mFollow1 = NULL;
    mFollow2 = NULL;
    mFollowLen = 0;
+
+   SetLinearEffectFlag(false);
 }
 
 EffectCompressor::~EffectCompressor()

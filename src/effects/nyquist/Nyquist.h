@@ -30,8 +30,8 @@
 #define NYQUISTEFFECTS_VERSION wxT("1.0.0.0")
 #define NYQUISTEFFECTS_FAMILY wxT("Nyquist")
 
-#define NYQUIST_PROMPT_ID wxT("=== Nyquist Prompt ===")
-#define NYQUIST_WORKER_ID wxT("=== Nyquist Worker ===")
+#define NYQUIST_PROMPT_ID wxT("Nyquist Prompt")
+#define NYQUIST_WORKER_ID wxT("Nyquist Worker")
 
 enum NyqControlType
 {
@@ -84,6 +84,7 @@ public:
    virtual wxString GetFamily();
    virtual bool IsInteractive();
    virtual bool IsDefault();
+   virtual bool EnableFromGetGo(){ return true;};
 
    // EffectClientInterface implementation
 

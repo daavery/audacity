@@ -16,7 +16,7 @@
 *//****************************************************************//**
 
 \class EffectScienFilter
-\brief An Effect.
+\brief An Effect that applies 'classical' IIR filters.
 
   Performs IIR filtering that emulates analog filters, specifically
   Butterworth, Chebyshev Type I and Type II. Highpass and lowpass filters
@@ -159,6 +159,8 @@ EffectScienFilter::EffectScienFilter()
    mCutoff = DEF_Cutoff;
    mRipple = DEF_Passband;
    mStopbandRipple = DEF_Stopband;
+
+   SetLinearEffectFlag(true);
 
    mOrderIndex = mOrder - 1;
 
