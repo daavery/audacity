@@ -1231,7 +1231,7 @@ bool LadspaEffect::PopulateUI(wxWindow *parent)
    {
       wxSizer *paramSizer = new wxStaticBoxSizer(wxVERTICAL, w, _("Effect Output"));
 
-      wxFlexGridSizer *gridSizer = new wxFlexGridSizer(3, 0, 0);
+      wxFlexGridSizer *gridSizer = new wxFlexGridSizer(5, 0, 0);
       gridSizer->AddGrowableCol(3);
 
       wxControl *item;
