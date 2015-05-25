@@ -1100,7 +1100,6 @@ void TrackPanel::OnTimer()
    //  that indicates where the current play/record position is. (This also
    //  draws the moving vertical line.)
 
-   // PRL: mIndicatorShowing never becomes true!
    if (!gAudioIO->IsPaused() &&
        ( mIndicatorShowing || gAudioIO->IsStreamActive(p->GetAudioIOToken()))
 #ifdef EXPERIMENTAL_SCRUBBING_SMOOTH_SCROLL
@@ -1490,7 +1489,11 @@ void TrackPanel::OnPaint(wxPaintEvent & /* event */)
          // the drawing of the tracks.  This prevents flashing of the indicator
          // at higher magnifications, and keeps the green line still in the middle.
          indicator = gAudioIO->GetStreamTime();
-         mViewInfo->h = std::max(0.0, indicator - mViewInfo->screen / 2.0);
+         mViewInfo->h = indicator - mViewInfo->screen / 2.0;
+#if !defined(EXPERIMENTAL_SCROLLING_LIMITS)
+         // Can't scroll too far left
+         mViewInfo->h = std::max(0.0, mViewInfo->h);
+#endif
       }
 #endif
 
@@ -1514,7 +1517,6 @@ void TrackPanel::OnPaint(wxPaintEvent & /* event */)
 
    // Update the indicator in case it was damaged if this project is playing
 
-   // PRL: mIndicatorShowing never becomes true!
    AudacityProject* p = GetProject();
    if (!gAudioIO->IsPaused() &&
       (mIndicatorShowing || gAudioIO->IsStreamActive(p->GetAudioIOToken())))
@@ -2315,10 +2317,11 @@ bool TrackPanel::IsScrubbing()
    else if (mScrubToken == GetProject()->GetAudioIOToken())
       return true;
    else {
-      // Some other command might have stopped scrub play before we
-      // reached StopScrubbing()!  But that is okay.
       mScrubToken = -1;
       mScrubStartPosition = -1;
+#ifdef EXPERIMENTAL_SCRUBBING_SMOOTH_SCROLL
+      mSmoothScrollingScrub = false;
+#endif
       return false;
    }
 }
@@ -2350,9 +2353,12 @@ bool TrackPanel::MaybeStartScrubbing(wxMouseEvent &event)
       return false;
    else if (mScrubStartPosition >= 0) {
       const bool busy = gAudioIO->IsBusy();
-      if (busy && gAudioIO->GetNumCaptureChannels() > 0)
-         // Do not stop recording
+      if (busy && gAudioIO->GetNumCaptureChannels() > 0) {
+         // Do not stop recording, and don't try to start scrubbing after
+         // recording stops
+         mScrubStartPosition = -1;
          return false;
+      }
 
       wxCoord position = event.m_x;
       AudacityProject *p = GetActiveProject();
@@ -2375,6 +2381,7 @@ bool TrackPanel::MaybeStartScrubbing(wxMouseEvent &event)
             // but it may be varied during the scrub.
             mMaxScrubSpeed = options.maxScrubSpeed =
                p->GetTranscriptionToolBar()->GetPlaySpeed();
+            options.maxScrubTime = mTracks->GetEndTime();
             const bool cutPreview = false;
             const bool backwards = time1 < time0;
 #ifdef EXPERIMENTAL_SCRUBBING_SCROLL_WHEEL
@@ -2406,11 +2413,7 @@ bool TrackPanel::MaybeStartScrubbing(wxMouseEvent &event)
 bool TrackPanel::ContinueScrubbing(wxCoord position, bool maySkip)
 {
    wxCoord leadPosition = position;
-   double newEnd =
-	   std::max(0.0,
-	      std::min(PositionToTime(leadPosition, GetLeftOffset()),
-		     mTracks->GetEndTime()
-   ));
+   double newEnd = PositionToTime(leadPosition, GetLeftOffset());
 
    if (maySkip)
       // Cause OnTimer() to suppress the speed display
@@ -2438,13 +2441,6 @@ bool TrackPanel::StopScrubbing()
             ctb->StopPlaying();
          }
       }
-      mScrubToken = -1;
-      mScrubStartPosition = -1;
-
-#ifdef EXPERIMENTAL_SCRUBBING_SMOOTH_SCROLL
-      mSmoothScrollingScrub = false;
-#endif
-
       return true;
    }
    else
@@ -2715,7 +2711,7 @@ void TrackPanel::SelectionHandleClick(wxMouseEvent & event,
       if (startNewSelection) { // mouse is not at an edge, but after
          // quantization, we could be indicating the selection edge
          mSelStartValid = true;
-         mSelStart = PositionToTime(event.m_x, r.x);
+         mSelStart = std::max(0.0, PositionToTime(event.m_x, r.x));
          mStretchStart = nt->NearestBeatTime(mSelStart, &centerBeat);
          if (within(qBeat0, centerBeat, 0.1)) {
             mListener->TP_DisplayStatusMessage(
@@ -2806,8 +2802,10 @@ void TrackPanel::SelectionHandleClick(wxMouseEvent & event,
 void TrackPanel::StartSelection(int mouseXCoordinate, int trackLeftEdge)
 {
    mSelStartValid = true;
-   mSelStart = mViewInfo->h + ((mouseXCoordinate - trackLeftEdge)
-                               / mViewInfo->zoom);
+   mSelStart =
+      std::max(0.0,
+      mViewInfo->h + ((mouseXCoordinate - trackLeftEdge)
+      / mViewInfo->zoom));
 
    double s = mSelStart;
 
@@ -2837,7 +2835,7 @@ void TrackPanel::ExtendSelection(int mouseXCoordinate, int trackLeftEdge,
       // Must be dragging frequency bounds only.
       return;
 
-   double selend = PositionToTime(mouseXCoordinate, trackLeftEdge);
+   double selend = std::max(0.0, PositionToTime(mouseXCoordinate, trackLeftEdge));
    clip_bottom(selend, 0.0);
 
    double origSel0, origSel1;
@@ -3269,7 +3267,7 @@ void TrackPanel::Stretch(int mouseXCoordinate, int trackLeftEdge,
    }
 
    NoteTrack *pNt = (NoteTrack *) pTrack;
-   double moveto = PositionToTime(mouseXCoordinate, trackLeftEdge);
+   double moveto = std::max(0.0, PositionToTime(mouseXCoordinate, trackLeftEdge));
 
    // check to make sure tempo is not higher than 20 beats per second
    // (In principle, tempo can be higher, but not infinity.)

@@ -50,6 +50,7 @@ simplifies construction of menu items.
 #include <wx/utils.h>
 
 #include "FreqWindow.h"
+#include "effects/Contrast.h"
 #include "TrackPanel.h"
 
 #include "Project.h"
@@ -109,7 +110,6 @@ simplifies construction of menu items.
 #include "TimerRecordDialog.h"
 #include "SoundActivatedRecord.h"
 #include "LabelDialog.h"
-#include "effects/Contrast.h"
 
 #include "FileDialog.h"
 #include "SplashDialog.h"
@@ -844,7 +844,7 @@ void AudacityProject::CreateMenusAndCommands()
 
    c->BeginSubMenu(_("Add &New"));
 
-   c->AddItem(wxT("NewAudioTrack"),  _("&Audio Track"), FN(OnNewWaveTrack), wxT("Ctrl+Shift+N"));
+   c->AddItem(wxT("NewMonoTrack"),  _("&Mono Track"), FN(OnNewWaveTrack), wxT("Ctrl+Shift+N"));
    c->AddItem(wxT("NewStereoTrack"), _("&Stereo Track"), FN(OnNewStereoTrack));
    c->AddItem(wxT("NewLabelTrack"),  _("&Label Track"), FN(OnNewLabelTrack));
    c->AddItem(wxT("NewTimeTrack"),   _("&Time Track"), FN(OnNewTimeTrack));
@@ -2802,7 +2802,7 @@ void AudacityProject::NextWindow()
    }
 
    // Ran out of siblings, so make the current project active
-   if (!iter)
+   if (!iter && IsEnabled())
    {
       w = this;
    }
@@ -2851,7 +2851,7 @@ void AudacityProject::PrevWindow()
    }
 
    // Ran out of siblings, so make the current project active
-   if (!iter)
+   if (!iter && IsEnabled())
    {
       w = this;
    }
@@ -3226,10 +3226,6 @@ bool AudacityProject::OnEffect(const PluginID & ID, int flags)
          mTracks->Add(newTrack);
          newTrack->SetSelected(true);
       }
-      else {
-         wxMessageBox(_("You must select a track first."));
-         return false;
-      }
    }
 
    EffectManager & em = EffectManager::Get();
@@ -3304,32 +3300,42 @@ void AudacityProject::OnRepeatLastEffect(int WXUNUSED(index))
 
 
 
-void AudacityProject::OnManagePluginsMenu(EffectType Type)
+void AudacityProject::OnManagePluginsMenu(EffectType type)
 {
-   //gPrefs->Write( wxT("/Plugins/Rescan"), true);
-   //gPrefs->Read(wxT("/Plugins/CheckForUpdates"), &doCheck, true);
-   PluginManager::Get().CheckForUpdates(Type);
+   if (PluginManager::Get().ShowManager(this, type))
+   {
+      for (size_t i = 0; i < gAudacityProjects.GetCount(); i++) {
+         AudacityProject *p = gAudacityProjects[i];
 
-   for (size_t i = 0; i < gAudacityProjects.GetCount(); i++) {
-      AudacityProject *p = gAudacityProjects[i];
-
-      p->RebuildMenuBar();
+         p->RebuildMenuBar();
 #if defined(__WXGTK__)
-      // Workaround for:
-      //
-      //   http://bugzilla.audacityteam.org/show_bug.cgi?id=458
-      //
-      // This workaround should be removed when Audacity updates to wxWidgets 3.x which has a fix.
-      wxRect r = p->GetRect();
-      p->SetSize(wxSize(1,1));
-      p->SetSize(r.GetSize());
+         // Workaround for:
+         //
+         //   http://bugzilla.audacityteam.org/show_bug.cgi?id=458
+         //
+         // This workaround should be removed when Audacity updates to wxWidgets 3.x which has a fix.
+         wxRect r = p->GetRect();
+         p->SetSize(wxSize(1,1));
+         p->SetSize(r.GetSize());
 #endif
+      }
    }
 }
 
-void AudacityProject::OnManageGenerators(){   OnManagePluginsMenu(EffectTypeGenerate); }
-void AudacityProject::OnManageEffects(){      OnManagePluginsMenu(EffectTypeProcess); }
-void AudacityProject::OnManageAnalyzers(){    OnManagePluginsMenu(EffectTypeAnalyze); }
+void AudacityProject::OnManageGenerators()
+{
+   OnManagePluginsMenu(EffectTypeGenerate);
+}
+
+void AudacityProject::OnManageEffects()
+{
+   OnManagePluginsMenu(EffectTypeProcess);
+}
+
+void AudacityProject::OnManageAnalyzers()
+{
+   OnManagePluginsMenu(EffectTypeAnalyze);
+}
 
 
 
@@ -5130,7 +5136,34 @@ void AudacityProject::OnPlotSpectrum()
 
 void AudacityProject::OnContrast()
 {
-   InitContrastDialog(NULL);
+   // All of this goes away when the Contrast Dialog is converted to a module
+   if(!mContrastDialog)
+   {
+      wxPoint where;
+
+      where.x = 150;
+      where.y = 150;
+
+      mContrastDialog = new ContrastDialog(this, -1, _("Contrast Analysis (WCAG 2 compliance)"), where);
+
+      mContrastDialog->bFGset = false;
+      mContrastDialog->bBGset = false;
+   }
+
+   // Zero dialog boxes.  Do we need to do this here?
+   if( !mContrastDialog->bFGset )
+   {
+      mContrastDialog->mForegroundStartT->SetValue(0.0);
+      mContrastDialog->mForegroundEndT->SetValue(0.0);
+   }
+   if( !mContrastDialog->bBGset )
+   {
+      mContrastDialog->mBackgroundStartT->SetValue(0.0);
+      mContrastDialog->mBackgroundEndT->SetValue(0.0);
+   }
+
+   mContrastDialog->CentreOnParent();
+   mContrastDialog->Show();
 }
 
 
