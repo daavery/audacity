@@ -150,11 +150,6 @@ NyquistEffect::~NyquistEffect()
 {
 }
 
-void NyquistEffect::RedirectOutput()
-{
-   wxFAIL_MSG(XO("JKC: This function used to exist.  Have a look in SVN and see if you can find it") );
-}
-
 // IdentInterface implementation
 
 wxString NyquistEffect::GetPath()
@@ -785,6 +780,8 @@ bool NyquistEffect::ProcessOne()
                case WaveTrack::WaveformDBDisplay: view = wxT("\"Waveform (dB)\""); break;
                case WaveTrack::SpectrumDisplay: view = wxT("\"Spectrogram\""); break;
                case WaveTrack::SpectrumLogDisplay: view = wxT("\"Spectrogram log(f)\""); break;
+               case WaveTrack::SpectralSelectionDisplay: view = wxT("\"Spectral Selection\""); break;
+               case WaveTrack::SpectralSelectionLogDisplay: view = wxT("\"Spectral Selection log(f)\""); break;
                case WaveTrack::PitchDisplay: view = wxT("\"Pitch (EAC)\""); break;
                default: view = wxT("NIL"); break;
             }
@@ -1180,6 +1177,12 @@ wxArrayString NyquistEffect::ParseChoice(const NyqControl & ctrl)
 
    return choices;
 }
+
+void NyquistEffect::RedirectOutput()
+{
+   mRedirectOutput = true;
+}
+
 void NyquistEffect::SetCommand(wxString cmd)
 {
    mExternal = true;
@@ -1364,6 +1367,10 @@ void NyquistEffect::Parse(wxString line)
       else if (tokens[1] == wxT("linear")) {
          mEnablePreview = true;
          SetLinearEffectFlag(true);
+      }
+      else if (tokens[1] == wxT("selection")) {
+         mEnablePreview = true;
+         SetPreviewFullSelectionFlag(true);
       }
       else if (tokens[1] == wxT("disabled") || tokens[1] == wxT("false")) {
          mEnablePreview = false;

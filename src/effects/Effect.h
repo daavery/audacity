@@ -144,7 +144,8 @@ class AUDACITY_DLL_API Effect : public wxEvtHandler,
    // EffectHostInterface implementation
 
    virtual double GetDefaultDuration();
-   virtual double GetDuration(bool *isSelection = NULL);
+   virtual double GetDuration();
+   virtual wxString GetDurationFormat();
    virtual void SetDuration(double duration);
 
    virtual bool Apply();
@@ -320,6 +321,10 @@ protected:
    // To allow pre-mixing before Preview, set linearEffectFlag to true.
    void SetLinearEffectFlag(bool linearEffectFlag);
 
+   // Most effects only need to preview a short selection. However some
+   // (such as fade effects) need to know the full selection length.
+   void SetPreviewFullSelectionFlag(bool previewDurationFlag);
+
    // Most effects only require selected tracks to be copied for Preview.
    // If IncludeNotSelectedPreviewTracks(true), then non-linear effects have
    // preview copies of all wave tracks.
@@ -399,10 +404,13 @@ private:
 
    bool mIsLinearEffect;
    bool mPreviewWithNotSelected;
+   bool mPreviewFullSelection;
 
+   bool mIsSelection;
    double mDuration;
-   // mSetDuration should ONLY be set when SetDuration() is called.
-   double mSetDuration;
+   wxString mDurationFormat;
+
+   bool mIsPreview;
 
    bool mUIDebug;
 

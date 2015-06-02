@@ -113,6 +113,7 @@ scroll information.  It also has some status flags.
 #include "Prefs.h"
 #include "Snap.h"
 #include "Tags.h"
+#include "TimeTrack.h"
 #include "Track.h"
 #include "TrackPanel.h"
 #include "WaveTrack.h"
@@ -766,6 +767,7 @@ AudacityProject::AudacityProject(wxWindow * parent, wxWindowID id,
      mIsDeleting(false),
      mTracksFitVerticallyZoomed(false),  //lda
      mShowId3Dialog(true),               //lda
+     mScrollBeyondZero(false),
      mLastFocusedWindow(NULL),
      mKeyboardCaptured(NULL),
      mImportXMLTagHandler(NULL),
@@ -779,9 +781,7 @@ AudacityProject::AudacityProject(wxWindow * parent, wxWindowID id,
      mMenuClose(false)
      , mbInitializingScrollbar(false)
 {
-   int widths[] = {-2, -1};
-   mStatusBar = CreateStatusBar(2);
-   mStatusBar->SetStatusWidths(2, widths);
+   mStatusBar = CreateStatusBar(3);
 
    wxGetApp().SetMissingAliasedFileWarningShouldShow(true);
 
@@ -824,10 +824,6 @@ AudacityProject::AudacityProject(wxWindow * parent, wxWindowID id,
    mViewInfo.sbarScale = 1.0;
 
    UpdatePrefs();
-
-   // Some extra information
-   mViewInfo.bIsPlaying = false;
-   mViewInfo.bRedrawWaveform = false;
 
    mLockPlayRegion = false;
 
@@ -1018,9 +1014,11 @@ AudacityProject::AudacityProject(wxWindow * parent, wxWindowID id,
 
    mTrackFactory = new TrackFactory(mDirManager);
 
+   int widths[] = {GetControlToolBar()->WidthForStatusBar(), -2, -1};
+   mStatusBar->SetStatusWidths(3, widths);
    wxString msg = wxString::Format(_("Welcome to Audacity version %s"),
                                    AUDACITY_VERSION_STRING);
-   mStatusBar->SetStatusText(msg);
+   mStatusBar->SetStatusText(msg, 1);
    mLastStatusUpdateTime = ::wxGetUTCTime();
 
    mTimer = new wxTimer(this, AudacityProjectTimerID);
@@ -1059,6 +1057,9 @@ AudioIOStartStreamOptions AudacityProject::GetDefaultPlayOptions()
 
 void AudacityProject::UpdatePrefsVariables()
 {
+#ifdef EXPERIMENTAL_SCROLLING_LIMITS
+   gPrefs->Read(wxT("/GUI/ScrollBeyondZero"), &mScrollBeyondZero, false);
+#endif
    gPrefs->Read(wxT("/AudioFiles/ShowId3Dialog"), &mShowId3Dialog, true);
    gPrefs->Read(wxT("/AudioFiles/NormalizeOnLoad"),&mNormalizeOnLoad, false);
    gPrefs->Read(wxT("/GUI/AutoScroll"), &mViewInfo.bUpdateTrackIndicator, true);
@@ -1091,7 +1092,7 @@ void AudacityProject::UpdatePrefs()
    }
 
    if (mRuler) {
-      mRuler->RegenerateTooltips();
+      mRuler->UpdatePrefs();
    }
 
    // The toolbars will be recreated, so make sure we don't leave
@@ -1454,16 +1455,16 @@ void AudacityProject::OnScrollRightButton(wxScrollEvent & event)
 }
 
 
-//
-// This method, like the other methods prefaced with TP, handles TrackPanel
-// 'callback'.
-//
-void AudacityProject::TP_ScrollWindow(double scrollto)
+double AudacityProject::ScrollingLowerBoundTime() const
 {
-   double timeOffset = 0;
-#ifdef EXPERIMENTAL_SCROLLING_LIMITS
-   timeOffset = mViewInfo.screen / 2.0;
-#endif
+   return mScrollBeyondZero
+      ? std::min(mTracks->GetStartTime(), -mViewInfo.screen / 2.0)
+      : 0;
+}
+
+void AudacityProject::SetHorizontalThumb(double scrollto)
+{
+   const double timeOffset = -ScrollingLowerBoundTime();
    int pos = (int) (
       (scrollto + timeOffset) * mViewInfo.zoom * mViewInfo.sbarScale
    );
@@ -1475,6 +1476,15 @@ void AudacityProject::TP_ScrollWindow(double scrollto)
       pos = 0;
 
    mHsbar->SetThumbPosition(pos);
+}
+
+//
+// This method, like the other methods prefaced with TP, handles TrackPanel
+// 'callback'.
+//
+void AudacityProject::TP_ScrollWindow(double scrollto)
+{
+   SetHorizontalThumb(scrollto);
 
    // Call our Scroll method which updates our ViewInfo variables
    // to reflect the positions of the scrollbars
@@ -1525,22 +1535,23 @@ void AudacityProject::FixScrollbars()
    int panelWidth, panelHeight;
    mTrackPanel->GetTracksUsableArea(&panelWidth, &panelHeight);
 
+   double LastTime =
+      std::max(mTracks->GetEndTime(), mViewInfo.selectedRegion.t1());
+
    mViewInfo.screen = ((double) panelWidth) / mViewInfo.zoom;
-   double additional, lowerBound;
-#ifdef EXPERIMENTAL_SCROLLING_LIMITS
+   const double halfScreen = mViewInfo.screen / 2.0;
+
+   // If we can scroll beyond zero,
    // Add 1/2 of a screen of blank space to the end
    // and another 1/2 screen before the beginning
    // so that any point within the union of the selection and the track duration
    // may be scrolled to the midline.
-   additional = mViewInfo.screen;
-   lowerBound = - additional / 2.0;
-#else
-   // Formerly just added 1/4 screen at the end
-   additional = mViewInfo.screen / 4.0;
-   lowerBound = 0.0;
-#endif
-   double LastTime =
-      std::max( mTracks->GetEndTime(), mViewInfo.selectedRegion.t1() );
+   // May add even more to the end, so that you can always scroll the starting time to zero.
+   const double lowerBound = ScrollingLowerBoundTime();
+   const double additional = mScrollBeyondZero
+      ? -lowerBound + std::max(halfScreen, mViewInfo.screen - LastTime)
+      : mViewInfo.screen / 4.0;
+
    mViewInfo.total = LastTime + additional;
 
    // Don't remove time from total that's still on the screen
@@ -1624,11 +1635,7 @@ void AudacityProject::FixScrollbars()
       int scaledSbarScreen = (int)(mViewInfo.sbarScreen * mViewInfo.sbarScale);
       int scaledSbarTotal = (int)(mViewInfo.sbarTotal * mViewInfo.sbarScale);
       int offset;
-#ifdef EXPERIMENTAL_SCROLLING_LIMITS
-      offset = scaledSbarScreen / 2;
-#else
-      offset = 0;
-#endif
+      offset = -lowerBound * mViewInfo.zoom * mViewInfo.sbarScale;
 
       mHsbar->SetScrollbar(scaledSbarH + offset, scaledSbarScreen, scaledSbarTotal,
          scaledSbarScreen, TRUE);
@@ -1817,17 +1824,11 @@ void AudacityProject::OnODTaskComplete(wxCommandEvent & WXUNUSED(event))
 
 void AudacityProject::OnScroll(wxScrollEvent & WXUNUSED(event))
 {
-   wxInt64 hlast = mViewInfo.sbarH;
+   const wxInt64 hlast = mViewInfo.sbarH;
 
-   double lowerBound;
-   wxInt64 offset;
-#ifdef EXPERIMENTAL_SCROLLING_LIMITS
-   offset = (0.5 + (mViewInfo.zoom * mViewInfo.screen / 2.0));
-   lowerBound = -mViewInfo.screen / 2.0;
-#else
-   offset = 0.0;
-   lowerBound = 0.0;
-#endif
+   const double lowerBound = ScrollingLowerBoundTime();
+   const wxInt64 offset = 0.5 + -lowerBound * mViewInfo.zoom;
+
    mViewInfo.sbarH =
       (wxInt64)(mHsbar->GetThumbPosition() / mViewInfo.sbarScale) - offset;
 
@@ -1839,6 +1840,16 @@ void AudacityProject::OnScroll(wxScrollEvent & WXUNUSED(event))
 
       if (mViewInfo.h < lowerBound)
          mViewInfo.h = lowerBound;
+   }
+
+
+   if (mScrollBeyondZero) {
+      enum { SCROLL_PIXEL_TOLERANCE = 10 };
+      if (fabs(mViewInfo.h * mViewInfo.zoom) < SCROLL_PIXEL_TOLERANCE) {
+         // Snap the scrollbar to 0
+         mViewInfo.h = 0;
+         SetHorizontalThumb(0.0);
+      }
    }
 
    int lastv = mViewInfo.vpos;
@@ -1867,6 +1878,9 @@ bool AudacityProject::HandleKeyDown(wxKeyEvent & event)
    // Any other keypresses must be destined for this project window.
    if (wxGetTopLevelParent(wxWindow::FindFocus()) != this)
       return false;
+
+   if (event.GetKeyCode() == WXK_ESCAPE)
+      mTrackPanel->HandleEscapeKey(true);
 
    if (event.GetKeyCode() == WXK_ALT)
       mTrackPanel->HandleAltKey(true);
@@ -1913,6 +1927,9 @@ bool AudacityProject::HandleKeyUp(wxKeyEvent & event)
    // All keypresses must be destined for this project window.
    if (wxGetTopLevelParent(wxWindow::FindFocus()) != this)
       return false;
+
+   if (event.GetKeyCode() == WXK_ESCAPE)
+      mTrackPanel->HandleEscapeKey(false);
 
    if (event.GetKeyCode() == WXK_ALT)
       mTrackPanel->HandleAltKey(false);
@@ -3276,10 +3293,28 @@ void AudacityProject::UnlockAllBlocks()
    }
 }
 
+class ProjectDisabler
+{
+public:
+   ProjectDisabler(wxWindow *w)
+   :  mWindow(w)
+   {
+      mWindow->GetEventHandler()->SetEvtHandlerEnabled(false);
+   }
+   ~ProjectDisabler()
+   {
+      mWindow->GetEventHandler()->SetEvtHandlerEnabled(true);
+   }
+private:
+   wxWindow *mWindow;
+};
+
 bool AudacityProject::Save(bool overwrite /* = true */ ,
                            bool fromSaveAs /* = false */,
                            bool bWantSaveCompressed /*= false*/)
 {
+   ProjectDisabler disabler(this);
+
    if (bWantSaveCompressed)
       wxASSERT(fromSaveAs);
    else
@@ -3492,7 +3527,7 @@ bool AudacityProject::Save(bool overwrite /* = true */ ,
       wxRemoveFile(safetyFileName);
 
    mStatusBar->SetStatusText(wxString::Format(_("Saved %s"),
-                                              mFileName.c_str()));
+                                              mFileName.c_str()), 1);
 
    return true;
 }
@@ -4270,11 +4305,6 @@ void AudacityProject::SetCaptureMeter(Meter *capture)
    }
 }
 
-void AudacityProject::SetStop(bool bStopped)
-{
-   mTrackPanel->SetStop(bStopped);
-}
-
 void AudacityProject::OnTimer(wxTimerEvent& WXUNUSED(event))
 {
    MixerToolBar *mixerToolBar = GetMixerToolBar();
@@ -4315,7 +4345,7 @@ void AudacityProject::OnTimer(wxTimerEvent& WXUNUSED(event))
          else
             msg.Printf(_("Out of disk space"));
 
-         mStatusBar->SetStatusText(msg);
+         mStatusBar->SetStatusText(msg, 1);
       }
    }
    else if(ODManager::IsInstanceCreated())
@@ -4336,7 +4366,7 @@ void AudacityProject::OnTimer(wxTimerEvent& WXUNUSED(event))
 
 
             msg.Printf(_("On-demand import and waveform calculation complete."));
-            mStatusBar->SetStatusText(msg);
+            mStatusBar->SetStatusText(msg, 1);
 
          }
          else if(numTasks>1)
@@ -4347,7 +4377,7 @@ void AudacityProject::OnTimer(wxTimerEvent& WXUNUSED(event))
              ratioComplete*100.0);
 
 
-         mStatusBar->SetStatusText(msg);
+         mStatusBar->SetStatusText(msg, 1);
       }
    }
 }
@@ -4536,7 +4566,7 @@ void AudacityProject::EditClipboardByLabel( WaveTrack::EditDestFunction action )
 // TrackPanel callback method
 void AudacityProject::TP_DisplayStatusMessage(wxString msg)
 {
-   mStatusBar->SetStatusText(msg);
+   mStatusBar->SetStatusText(msg, 1);
    mLastStatusUpdateTime = ::wxGetUTCTime();
 }
 
@@ -4783,9 +4813,9 @@ void AudacityProject::OnAudioIORate(int rate)
    display = wxString::Format(_("Actual Rate: %d"), rate);
    int x, y;
    mStatusBar->GetTextExtent(display, &x, &y);
-   int widths[] = {-1, x+50};
-   mStatusBar->SetStatusWidths(2, widths);
-   mStatusBar->SetStatusText(display, 1);
+   int widths[] = {GetControlToolBar()->WidthForStatusBar(), -1, x+50};
+   mStatusBar->SetStatusWidths(3, widths);
+   mStatusBar->SetStatusText(display, 2);
 }
 
 void AudacityProject::OnAudioIOStartRecording()

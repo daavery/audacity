@@ -28,7 +28,9 @@ class wxRect;
 class wxHashTable;
 
 class Track;
+class WaveDisplay;
 class WaveTrack;
+class WaveTrackCache;
 class WaveClip;
 class NoteTrack;
 class LabelTrack;
@@ -72,7 +74,7 @@ class AUDACITY_DLL_API TrackArtist {
    int GetSpectrumMaxFreq(int deffreq);
    int GetSpectrumLogMinFreq(int deffreq);
    int GetSpectrumLogMaxFreq(int deffreq);
-   int GetSpectrumWindowSize();
+   int GetSpectrumWindowSize(bool includeZeroPadding);
 
 #ifdef EXPERIMENTAL_FFT_SKIP_POINTS
    int GetSpectrumFftSkipPoints();
@@ -138,10 +140,10 @@ class AUDACITY_DLL_API TrackArtist {
 
    void DrawClipWaveform(WaveTrack *track, WaveClip *clip,
                          wxDC & dc, const wxRect & r, const ViewInfo *viewInfo,
-                         bool drawEnvelope, bool drawSamples, bool drawSliders,
+                         bool drawEnvelope, bool drawSamples,
                          bool dB, bool muted);
 
-   void DrawClipSpectrum(WaveTrack *track, WaveClip *clip,
+   void DrawClipSpectrum(WaveTrackCache &cache, WaveClip *clip,
                          wxDC & dc, const wxRect & r, const ViewInfo *viewInfo,
                          bool autocorrelation, bool logF);
 
@@ -155,13 +157,11 @@ class AUDACITY_DLL_API TrackArtist {
 #ifdef EXPERIMENTAL_OUTPUT_DISPLAY
    void DrawMinMaxRMS(wxDC & dc, const wxRect & r, const double env[],
                       float zoomMin, float zoomMax, bool dB,
-                      const float min[], const float max[], const float rms[],
-                      const int bl[], bool showProgress, bool muted, const float gain);
+                      const WaveDisplay &display, bool showProgress, bool muted, const float gain);
 #else
    void DrawMinMaxRMS(wxDC & dc, const wxRect & r, const double env[],
                       float zoomMin, float zoomMax, bool dB,
-                      const float min[], const float max[], const float rms[],
-                      const int bl[], bool showProgress, bool muted);
+                      const WaveDisplay &display, bool showProgress, bool muted);
 #endif
    void DrawIndividualSamples(wxDC & dc, const wxRect & r,
                               float zoomMin, float zoomMax, bool dB,
@@ -183,6 +183,9 @@ class AUDACITY_DLL_API TrackArtist {
    int mMaxFreq;              // "/Spectrum/MaxFreq"
    int mMinFreq;              // "/Spectrum/MinFreq"
    int mWindowSize;           // "/Spectrum/FFTSize"
+#ifdef EXPERIMENTAL_ZERO_PADDED_SPECTROGRAMS
+   int mZeroPaddingFactor;    // "/Spectrum/ZeroPaddingFactor"
+#endif
    bool mIsGrayscale;         // "/Spectrum/Grayscale"
    bool mbShowTrackNameInWaveform;  // "/GUI/ShowTrackNameInWaveform"
 
