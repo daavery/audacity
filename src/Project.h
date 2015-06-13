@@ -31,7 +31,6 @@
 #include "xml/XMLTagHandler.h"
 #include "toolbars/SelectionBarListener.h"
 #include "toolbars/SpectralSelectionBarListener.h"
-#include "widgets/Meter.h"
 
 #include <wx/defs.h>
 #include <wx/event.h>
@@ -63,6 +62,7 @@ class EffectPlugs;
 class TrackPanel;
 class FreqWindow;
 class ContrastDialog;
+class Meter;
 
 // toolbar classes
 class ControlToolBar;
@@ -107,6 +107,12 @@ enum PlayMode {
    normalPlay,
    oneSecondPlay,
    loopedPlay
+};
+
+enum StatusBarField {
+   stateStatusBarField = 1,
+   mainStatusBarField = 2,
+   rateStatusBarField = 3
 };
 
 // XML handler for <import> tag

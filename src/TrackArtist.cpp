@@ -173,6 +173,7 @@ audio tracks.
 #include "LabelTrack.h"
 #include "TimeTrack.h"
 #include "Prefs.h"
+#include "prefs/SpectrumPrefs.h"
 #include "Sequence.h"
 #include "Spectrum.h"
 #include "ViewInfo.h"
@@ -270,14 +271,6 @@ TrackArtist::TrackArtist()
 
    SetColours();
    vruler = new Ruler();
-
-#ifdef EXPERIMENTAL_FFT_Y_GRID
-   fftYGridOld=true;
-#endif //EXPERIMENTAL_FFT_Y_GRID
-
-#ifdef EXPERIMENTAL_FIND_NOTES
-   fftFindNotesOld=false;
-#endif
 }
 
 TrackArtist::~TrackArtist()
@@ -469,19 +462,11 @@ void TrackArtist::DrawTrack(const Track * t,
                       drawEnvelope,  drawSamples, drawSliders, true, muted);
          break;
       case WaveTrack::SpectrumDisplay:
-         DrawSpectrum(wt, dc, r, viewInfo, false, false);
-         break;
       case WaveTrack::SpectrumLogDisplay:
-         DrawSpectrum(wt, dc, r, viewInfo, false, true);
-         break;
       case WaveTrack::SpectralSelectionDisplay:
-         DrawSpectrum(wt, dc, r, viewInfo, false, false);
-         break;
       case WaveTrack::SpectralSelectionLogDisplay:
-         DrawSpectrum(wt, dc, r, viewInfo, false, true);
-         break;
       case WaveTrack::PitchDisplay:
-         DrawSpectrum(wt, dc, r, viewInfo, true, false);
+         DrawSpectrum(wt, dc, r, viewInfo);
          break;
       }
       if (mbShowTrackNameInWaveform &&
@@ -680,6 +665,10 @@ void TrackArtist::DrawVRuler(Track *t, wxDC * dc, wxRect & r)
 
 void TrackArtist::UpdateVRuler(Track *t, wxRect & r)
 {
+#ifdef EXPERIMENTAL_FFT_SKIP_POINTS
+   const int fftSkipPoints = SpectrogramSettings::defaults().fftSkipPoints;
+#endif //EXPERIMENTAL_FFT_SKIP_POINTS
+
    // Label tracks do not have a vruler
    if (t->GetKind() == Track::Label) {
       return;
@@ -819,14 +808,14 @@ void TrackArtist::UpdateVRuler(Track *t, wxRect & r)
 
          int maxFreq = GetSpectrumMaxFreq(freq);
 #ifdef EXPERIMENTAL_FFT_SKIP_POINTS
-         maxFreq/=(mFftSkipPoints+1);
+         maxFreq/=(fftSkipPoints+1);
 #endif //EXPERIMENTAL_FFT_SKIP_POINTS
          if(maxFreq > freq)
             maxFreq = freq;
 
          int minFreq = GetSpectrumMinFreq(0);
 #ifdef EXPERIMENTAL_FFT_SKIP_POINTS
-         minFreq/=(mFftSkipPoints+1);
+         minFreq/=(fftSkipPoints+1);
 #endif //EXPERIMENTAL_FFT_SKIP_POINTS
          if(minFreq < 0)
             minFreq = 0;
@@ -865,14 +854,14 @@ void TrackArtist::UpdateVRuler(Track *t, wxRect & r)
 
          int maxFreq = GetSpectrumLogMaxFreq(freq);
 #ifdef EXPERIMENTAL_FFT_SKIP_POINTS
-         maxFreq/=(mFftSkipPoints+1);
+         maxFreq/=(fftSkipPoints+1);
 #endif //EXPERIMENTAL_FFT_SKIP_POINTS
          if(maxFreq > freq)
             maxFreq = freq;
 
          int minFreq = GetSpectrumLogMinFreq(freq/1000.0);
 #ifdef EXPERIMENTAL_FFT_SKIP_POINTS
-         minFreq/=(mFftSkipPoints+1);
+         minFreq/=(fftSkipPoints+1);
 #endif //EXPERIMENTAL_FFT_SKIP_POINTS
          if(minFreq < 1)
             minFreq = 1;
@@ -957,6 +946,33 @@ int GetWaveYPos(float value, float min, float max,
 
    value = (max - value) / (max - min);
    return (int) (value * (height - 1) + 0.5);
+}
+
+float FromDB(float value, double dBRange)
+{
+   if (value == 0)
+      return 0;
+
+   double sign = (value >= 0 ? 1 : -1);
+   return pow(10.0, ((fabs(value) * dBRange) - dBRange) / 20.0)*sign;
+}
+
+float ValueOfPixel(int y, int height, bool offset,
+   bool dB, double dBRange, float zoomMin, float zoomMax)
+{
+   wxASSERT(height > 0);
+   float v = zoomMax - (y / (float)height) * (zoomMax - zoomMin);
+   if (offset) {
+      if (v > 0.0)
+         v += .5;
+      else
+         v -= .5;
+   }
+
+   if (dB)
+      v = FromDB(v, dBRange);
+
+   return v;
 }
 
 void TrackArtist::DrawNegativeOffsetTrackArrows(wxDC &dc, const wxRect &r)
@@ -1103,15 +1119,13 @@ void TrackArtist::DrawWaveformBackground(wxDC &dc, const wxRect &r, const double
 }
 
 
+void TrackArtist::DrawMinMaxRMS(wxDC &dc, const wxRect &r, const double env[],
+                                float zoomMin, float zoomMax, bool dB,
+                                const WaveDisplay &display, bool /* showProgress */, bool muted
 #ifdef EXPERIMENTAL_OUTPUT_DISPLAY
-void TrackArtist::DrawMinMaxRMS(wxDC &dc, const wxRect &r, const double env[],
-                                float zoomMin, float zoomMax, bool dB,
-                                const WaveDisplay &display, bool showProgress, bool muted, const float gain)
-#else
-void TrackArtist::DrawMinMaxRMS(wxDC &dc, const wxRect &r, const double env[],
-                                float zoomMin, float zoomMax, bool dB,
-                                const WaveDisplay &display, bool WXUNUSED(showProgress), bool muted)
+                                , const float gain
 #endif
+                               )
 {
    const float *const min = display.min;
    const float *const max = display.max;
@@ -1477,8 +1491,8 @@ void TrackArtist::DrawWaveform(WaveTrack *track,
    }
 
    if (drawSliders) {
-      DrawTimeSlider(track, dc, r, viewInfo, true);  // directed right
-      DrawTimeSlider(track, dc, r, viewInfo, false); // directed left
+      DrawTimeSlider(dc, r, true);  // directed right
+      DrawTimeSlider(dc, r, false); // directed left
    }
 }
 
@@ -1667,14 +1681,13 @@ void TrackArtist::DrawClipWaveform(WaveTrack *track,
    float zoomMin, zoomMax;
    track->GetDisplayBounds(&zoomMin, &zoomMax);
 
-   WaveDisplay display;
+   WaveDisplay display(mid.width);
    bool isLoadingOD = false;//true if loading on demand block in sequence.
 
    // The WaveClip class handles the details of computing the shape
    // of the waveform.  The only way GetWaveDisplay will fail is if
    // there's a serious error, like some of the waveform data can't
    // be loaded.  So if the function returns false, we can just exit.
-   display.Allocate(mid.width);
    if (!clip->GetWaveDisplay(display,
       t0, pps, isLoadingOD)) {
       return;
@@ -1691,7 +1704,7 @@ void TrackArtist::DrawClipWaveform(WaveTrack *track,
    // the envelope and using a colored pen for the selected
    // part of the waveform
    DrawWaveformBackground(dc, mid, envValues, zoomMin, zoomMax, dB,
-                          display.where, ssel0, ssel1, drawEnvelope,
+                          &display.where[0], ssel0, ssel1, drawEnvelope,
                           !track->GetSelected());
 
    if (!showIndividualSamples) {
@@ -1737,10 +1750,8 @@ void TrackArtist::DrawClipWaveform(WaveTrack *track,
 }
 
 
-void TrackArtist::DrawTimeSlider(WaveTrack * WXUNUSED(track),
-                                 wxDC & dc,
+void TrackArtist::DrawTimeSlider(wxDC & dc,
                                  const wxRect & r,
-                                 const ViewInfo * WXUNUSED(viewInfo),
                                  bool rightwards)
 {
    const int border = 3; // 3 pixels all round.
@@ -1799,9 +1810,7 @@ void TrackArtist::DrawTimeSlider(WaveTrack * WXUNUSED(track),
 void TrackArtist::DrawSpectrum(WaveTrack *track,
                                wxDC & dc,
                                const wxRect & r,
-                               const ViewInfo *viewInfo,
-                               bool autocorrelation,
-                               bool logF)
+                               const ViewInfo *viewInfo)
 {
    DrawBackgroundWithSelection(&dc, r, track, blankSelectedBrush, blankBrush,
          viewInfo->selectedRegion.t0(), viewInfo->selectedRegion.t1(), 
@@ -1809,12 +1818,12 @@ void TrackArtist::DrawSpectrum(WaveTrack *track,
 
    WaveTrackCache cache(track);
    for (WaveClipList::compatibility_iterator it = track->GetClipIterator(); it; it = it->GetNext()) {
-      DrawClipSpectrum(cache, it->GetData(), dc, r, viewInfo, autocorrelation, logF);
+      DrawClipSpectrum(cache, it->GetData(), dc, r, viewInfo);
    }
 }
 
 static inline float findValue
-(float *spectrum, float bin0, float bin1, int half,
+(const float *spectrum, float bin0, float bin1, int half,
  bool autocorrelation, int gain, int range)
 {
    float value;
@@ -1884,15 +1893,17 @@ void TrackArtist::DrawClipSpectrum(WaveTrackCache &cache,
                                    WaveClip *clip,
                                    wxDC & dc,
                                    const wxRect & r,
-                                   const ViewInfo *viewInfo,
-                                   bool autocorrelation,
-                                   bool logF)
+                                   const ViewInfo *viewInfo)
 {
 #ifdef PROFILE_WAVEFORM
    Profiler profiler;
 #endif
 
    const WaveTrack *const track = cache.GetTrack();
+   const int display = track->GetDisplay();
+   const bool autocorrelation = (WaveTrack::PitchDisplay == display);
+   const bool logF = (WaveTrack::SpectrumLogDisplay == display
+      || WaveTrack::SpectralSelectionLogDisplay == display);
 
    enum { MONOCHROME_LINE = 230, COLORED_LINE  = 0 };
    enum { DASH_LENGTH = 10 /* pixels */ };
@@ -1921,9 +1932,19 @@ void TrackArtist::DrawClipSpectrum(WaveTrackCache &cache,
    }
 #endif
 
-   int range = gPrefs->Read(wxT("/Spectrum/Range"), 80L);
-   int gain = gPrefs->Read(wxT("/Spectrum/Gain"), 20L);
-
+   const SpectrogramSettings &settings = SpectrogramSettings::defaults();
+   const bool &isGrayscale = settings.isGrayscale;
+   const int &range = settings.range;
+   const int &gain = settings.gain;
+#ifdef EXPERIMENTAL_FIND_NOTES
+   const bool &fftFindNotes = settings.fftFindNotes;
+   const bool &findNotesMinA = settings.findNotesMinA;
+   const bool &numberOfMaxima = settings.numberOfMaxima;
+   const bool &findNotesQuantize = settings.findNotesQuantize;
+#endif
+#ifdef EXPERIMENTAL_FFT_Y_GRID
+   const bool &fftYGrid = settings.fftYGrid;
+#endif
 
    dc.SetPen(*wxTRANSPARENT_PEN);
 
@@ -1935,16 +1956,16 @@ void TrackArtist::DrawClipSpectrum(WaveTrackCache &cache,
    if (!image)return;
    unsigned char *data = image->GetData();
 
-   int windowSize = GetSpectrumWindowSize(!autocorrelation);
-   const int half = windowSize / 2;
-   float *freq = new float[mid.width * half];
-   sampleCount *where = new sampleCount[mid.width+1];
+   const int half = GetSpectrumWindowSize(!autocorrelation) / 2;
+   const double binUnit = rate / (2 * half);
+   const float *freq = 0;
+   const sampleCount *where = 0;
 
    bool updated = clip->GetSpectrogram(cache, freq, where, mid.width,
                               t0, pps, autocorrelation);
 
 #ifdef EXPERIMENTAL_FFT_SKIP_POINTS
-   int fftSkipPoints = gPrefs->Read(wxT("/Spectrum/FFTSkipPoints"), 0L);
+   int fftSkipPoints = SpectrogramSettings::defaults().fftSkipPoints;
    int fftSkipPoints1 = fftSkipPoints + 1;
 #endif //EXPERIMENTAL_FFT_SKIP_POINTS
 
@@ -1971,14 +1992,12 @@ void TrackArtist::DrawClipSpectrum(WaveTrackCache &cache,
          minFreq = 1.0;
    }
 
-   // PRL:  Must the following two be integers?
-   int minSamples = int((double)minFreq * (double)windowSize / rate + 0.5);   // units are fft bins
-   int maxSamples = int((double)maxFreq * (double)windowSize / rate + 0.5);
-   float binPerPx = float(maxSamples - minSamples) / float(mid.height);
+   float minBin = ((double)minFreq / binUnit);
+   float maxBin = ((double)maxFreq / binUnit);
+   float binPerPx = float(maxBin - minBin) / float(mid.height);
 
    const float
       //      e=exp(1.0f),
-      f = rate / 2.0f / half,
       lmin = logf(float(minFreq)),
       lmax = logf(float(maxFreq)),
       scale = lmax - lmin;
@@ -1994,8 +2013,8 @@ void TrackArtist::DrawClipSpectrum(WaveTrackCache &cache,
    for (int y = 0; y < mid.height; y++) {
       float n = (float(y) / mid.height*scale2 - lmin2) * 12;
       float n2 = (float(y + 1) / mid.height*scale2 - lmin2) * 12;
-      float f = float(minFreq) / (mFftSkipPoints + 1)*powf(2.0f, n / 12.0f + lmin2);
-      float f2 = float(minFreq) / (mFftSkipPoints + 1)*powf(2.0f, n2 / 12.0f + lmin2);
+      float f = float(minFreq) / (fftSkipPoints + 1)*powf(2.0f, n / 12.0f + lmin2);
+      float f2 = float(minFreq) / (fftSkipPoints + 1)*powf(2.0f, n2 / 12.0f + lmin2);
       n = logf(f / 440) / log2 * 12;
       n2 = logf(f2 / 440) / log2 * 12;
       if (floor(n) < floor(n2))
@@ -2006,14 +2025,18 @@ void TrackArtist::DrawClipSpectrum(WaveTrackCache &cache,
 #endif //EXPERIMENTAL_FFT_Y_GRID
 
    if (!updated && clip->mSpecPxCache->valid && (clip->mSpecPxCache->len == mid.height * mid.width)
+      && gain == clip->mSpecPxCache->gain
+      && range == clip->mSpecPxCache->range
+      && minFreq == clip->mSpecPxCache->minFreq
+      && maxFreq == clip->mSpecPxCache->maxFreq
 #ifdef EXPERIMENTAL_FFT_Y_GRID
-   && mFftYGrid==fftYGridOld
+   && fftYGrid==fftYGridOld
 #endif //EXPERIMENTAL_FFT_Y_GRID
 #ifdef EXPERIMENTAL_FIND_NOTES
-   && mFftFindNotes==fftFindNotesOld
-   && mFindNotesMinA==findNotesMinAOld
-   && mNumberOfMaxima==findNotesNOld
-   && mFindNotesQuantize==findNotesQuantizeOld
+   && fftFindNotes==fftFindNotesOld
+   && findNotesMinA==findNotesMinAOld
+   && numberOfMaxima==findNotesNOld
+   && findNotesQuantize==findNotesQuantizeOld
 #endif
    ) {
       // cache is up to date
@@ -2022,21 +2045,25 @@ void TrackArtist::DrawClipSpectrum(WaveTrackCache &cache,
       delete clip->mSpecPxCache;
       clip->mSpecPxCache = new SpecPxCache(mid.width * mid.height);
       clip->mSpecPxCache->valid = true;
+      clip->mSpecPxCache->gain = gain;
+      clip->mSpecPxCache->range = range;
+      clip->mSpecPxCache->minFreq = minFreq;
+      clip->mSpecPxCache->maxFreq = maxFreq;
 #ifdef EXPERIMENTAL_FIND_NOTES
-      fftFindNotesOld=mFftFindNotes;
-      findNotesMinAOld=mFindNotesMinA;
-      findNotesNOld=mNumberOfMaxima;
-      findNotesQuantizeOld=mFindNotesQuantize;
+      fftFindNotesOld = fftFindNotes;
+      findNotesMinAOld = findNotesMinA;
+      findNotesNOld = numberOfMaxima;
+      findNotesQuantizeOld = findNotesQuantize;
 #endif
 
 #ifdef EXPERIMENTAL_FIND_NOTES
-      const float
 #ifdef EXPERIMENTAL_FFT_SKIP_POINTS
-         lmins = logf(float(minFreq) / (mFftSkipPoints + 1)),
-         lmaxs = logf(float(maxFreq) / (mFftSkipPoints + 1)),
+      const float
+         lmins = logf(float(minFreq) / (fftSkipPoints + 1)),
+         lmaxs = logf(float(maxFreq) / (fftSkipPoints + 1))
 #else //!EXPERIMENTAL_FFT_SKIP_POINTS
          lmins = lmin,
-         lmaxs = lmax,
+         lmaxs = lmax
 #endif //EXPERIMENTAL_FFT_SKIP_POINTS
          ;
 #endif //EXPERIMENTAL_FIND_NOTES
@@ -2046,40 +2073,41 @@ void TrackArtist::DrawClipSpectrum(WaveTrackCache &cache,
       float maxima0[128], maxima1[128];
       const float
 #ifdef EXPERIMENTAL_FFT_SKIP_POINTS
-         f2bin = half / (rate / 2.0f / (mFftSkipPoints + 1)),
+         f2bin = half / (rate / 2.0f / (fftSkipPoints + 1)),
 #else //!EXPERIMENTAL_FFT_SKIP_POINTS
          f2bin = half / (rate / 2.0f),
 #endif //EXPERIMENTAL_FFT_SKIP_POINTS
          bin2f = 1.0f / f2bin,
          minDistance = powf(2.0f, 2.0f / 12.0f),
-         i0 = expf(lmin) / f,
-         i1 = expf(scale + lmin) / f,
+         i0 = expf(lmin) / binUnit,
+         i1 = expf(scale + lmin) / binUnit,
          minColor = 0.0f;
       const int maxTableSize = 1024;
       int *indexes = new int[maxTableSize];
 #endif //EXPERIMENTAL_FIND_NOTES
 
-      for (int x = 0; x < mid.width; ++x)
+      for (int xx = 0; xx < mid.width; ++xx)
       {
          if (!logF) {
-            for (int yy = 0; yy < mid.height; yy++) {
-               float bin0 = float(yy) * binPerPx + minSamples;
-               float bin1 = float(yy + 1) * binPerPx + minSamples;
+            for (int yy = 0; yy < mid.height; ++yy) {
+               float bin0 = float(yy) * binPerPx + minBin;
+               float bin1 = float(yy + 1) * binPerPx + minBin;
                const float value = findValue
-                  (freq + half * x, bin0, bin1, half, autocorrelation, gain, range);
-               clip->mSpecPxCache->values[x * mid.height + yy] = value;
+                  (freq + half * xx, bin0, bin1, half, autocorrelation, gain, range);
+               clip->mSpecPxCache->values[xx * mid.height + yy] = value;
             }
          }
          else {
 #ifdef EXPERIMENTAL_FIND_NOTES
             int maximas=0;
-            if (!usePxCache && mFftFindNotes) {
+            const int x0 = half * xx;
+            if (fftFindNotes) {
                for (int i = maxTableSize-1; i >= 0; i--)
                   indexes[i]=-1;
 
                // Build a table of (most) values, put the index in it.
                for (int i = int(i0); i < int(i1); i++) {
-                  float freqi=freq[x0+int(i)];
+                  float freqi=freq[x0 + int(i)];
                   int value=int((freqi+gain+range)/range*(maxTableSize-1));
                   if (value < 0)
                      value=0;
@@ -2088,29 +2116,29 @@ void TrackArtist::DrawClipSpectrum(WaveTrackCache &cache,
                   indexes[value]=i;
                }
                // Build from the indices an array of maxima.
-               for (int i = maxTableSize-1; i >= 0; i--) {
-                  int index=indexes[i];
+               for (int i = maxTableSize - 1; i >= 0; i--) {
+                  int index = indexes[i];
                   if (index >= 0) {
-                     float freqi=freq[x0+index];
-                     if (freqi < mFindNotesMinA)
+                     float freqi = freq[x0 + index];
+                     if (freqi < findNotesMinA)
                         break;
 
-                     bool ok=true;
-                     for (int m=0; m < maximas; m++) {
+                     bool ok = true;
+                     for (int m = 0; m < maximas; m++) {
                         // Avoid to store very close maxima.
                         float maxm = maxima[m];
-                        if (maxm/index < minDistance && index/maxm < minDistance) {
-                           ok=false;
+                        if (maxm / index < minDistance && index / maxm < minDistance) {
+                           ok = false;
                            break;
                         }
                      }
                      if (ok) {
                         maxima[maximas++] = index;
-                        if (maximas >= mNumberOfMaxima)
+                        if (maximas >= numberOfMaxima)
                            break;
-            }
-         }
-      }
+                     }
+                  }
+               }
 
 // The f2pix helper macro converts a frequency into a pixel coordinate.
 #define f2pix(f) (logf(f)-lmins)/(lmaxs-lmins)*mid.height
@@ -2119,7 +2147,7 @@ void TrackArtist::DrawClipSpectrum(WaveTrackCache &cache,
                for (int i=0; i < maximas; i++) {
                   int index=maxima[i];
                   float f = float(index)*bin2f;
-                  if (mFindNotesQuantize)
+                  if (findNotesQuantize)
                   {  f = expf(int(log(f/440)/log2*12-0.5)/12.0f*log2)*440;
                   maxima[i] = f*f2bin;
                   }
@@ -2134,10 +2162,10 @@ void TrackArtist::DrawClipSpectrum(WaveTrackCache &cache,
             bool inMaximum = false;
 #endif //EXPERIMENTAL_FIND_NOTES
 
-            double yy2_base = exp(lmin) / f;
+            double yy2_base = exp(lmin) / binUnit;
             float yy2 = yy2_base;
             double exp_scale_per_height = exp(scale / mid.height);
-            for (int yy = 0; yy < mid.height; yy++) {
+            for (int yy = 0; yy < mid.height; ++yy) {
                if (int(yy2) >= half)
                   yy2=half-1;
                if (yy2<0)
@@ -2153,7 +2181,7 @@ void TrackArtist::DrawClipSpectrum(WaveTrackCache &cache,
                float value;
 
 #ifdef EXPERIMENTAL_FIND_NOTES
-               if (mFftFindNotes) {
+               if (fftFindNotes) {
                   if (it < maximas) {
                      float i0=maxima0[it];
                      if (yy >= i0)
@@ -2162,11 +2190,9 @@ void TrackArtist::DrawClipSpectrum(WaveTrackCache &cache,
                      if (inMaximum) {
                         float i1=maxima1[it];
                         if (yy+1 <= i1) {
-                           value=sumFreqValues(freq, x0, bin0, bin1);
-                           if (value < mFindNotesMinA)
+                           value=findValue(freq + x0, bin0, bin1, half, autocorrelation, gain, range);
+                           if (value < findNotesMinA)
                               value = minColor;
-                           else
-                              value = (value + gain + range) / (double)range;
                         } else {
                            it++;
                            inMaximum = false;
@@ -2181,41 +2207,40 @@ void TrackArtist::DrawClipSpectrum(WaveTrackCache &cache,
 #endif //EXPERIMENTAL_FIND_NOTES
                {
                   value = findValue
-                     (freq + half * x, bin0, bin1, half, autocorrelation, gain, range);
+                     (freq + half * xx, bin0, bin1, half, autocorrelation, gain, range);
                }
-               clip->mSpecPxCache->values[x * mid.height + yy] = value;
+               clip->mSpecPxCache->values[xx * mid.height + yy] = value;
                yy2 = yy2_base;
             } // each y
          } // is logF
-      } // each x
+      } // each xx
 
 
    } // updating cache
 
-   float selBinLo = freqLo * (double)windowSize / rate;
-   float selBinHi = freqHi * (double)windowSize / rate;
+   float selBinLo = freqLo / binUnit;
+   float selBinHi = freqHi / binUnit;
    float selBinCenter =
-      ((freqLo < 0 || freqHi < 0) ? -1 : sqrt(freqLo * freqHi))
-       * (double)windowSize / rate;
+      ((freqLo < 0 || freqHi < 0) ? -1 : sqrt(freqLo * freqHi)) / binUnit;
 
    sampleCount w1 = sampleCount(0.5 + rate *
       t0
    );
 
-   for (int x = 0; x < mid.width; ++x)
+   for (int xx = 0; xx < mid.width; ++xx)
    {
       sampleCount w0 = w1;
       w1 = sampleCount(0.5 + rate *
-         (t0 + (x+1) * tstep)
+         (t0 + (xx+1) * tstep)
       );
 
       // TODO: The logF and non-logF case are very similar.
       // They should be merged and simplified.
       if (!logF)
       {
-         for (int yy = 0; yy < mid.height; yy++) {
-            float bin0 = float (yy) * binPerPx + minSamples;
-            float bin1 = float (yy + 1) * binPerPx + minSamples;
+         for (int yy = 0; yy < mid.height; ++yy) {
+            float bin0 = float (yy) * binPerPx + minBin;
+            float bin1 = float (yy + 1) * binPerPx + minBin;
 
             // For spectral selection, determine what colour
             // set to use.  We use a darker selection if
@@ -2228,14 +2253,14 @@ void TrackArtist::DrawClipSpectrum(WaveTrackCache &cache,
             {
                bool isSpectral = ((track->GetDisplay() == WaveTrack::SpectralSelectionDisplay) ||
                                   (track->GetDisplay() == WaveTrack::SpectralSelectionLogDisplay));
-               selected = ChooseColorSet( bin0, bin1, selBinLo, selBinCenter, selBinHi, x/DASH_LENGTH, isSpectral );
+               selected = ChooseColorSet( bin0, bin1, selBinLo, selBinCenter, selBinHi, xx/DASH_LENGTH, isSpectral );
             }
 
             unsigned char rv, gv, bv;
             const float value =
-               clip->mSpecPxCache->values[x * mid.height + yy];
-            GetColorGradient(value, selected, mIsGrayscale, &rv, &gv, &bv);
-            int px = ((mid.height - 1 - yy) * mid.width + x) * 3;
+               clip->mSpecPxCache->values[xx * mid.height + yy];
+            GetColorGradient(value, selected, isGrayscale, &rv, &gv, &bv);
+            int px = ((mid.height - 1 - yy) * mid.width + xx) * 3;
             data[px++] = rv;
             data[px++] = gv;
             data[px] = bv;
@@ -2243,10 +2268,10 @@ void TrackArtist::DrawClipSpectrum(WaveTrackCache &cache,
       }
       else //logF
       {
-         double yy2_base=exp(lmin)/f;
+         double yy2_base=exp(lmin)/binUnit;
          float yy2 = yy2_base;
          double exp_scale_per_height = exp(scale/mid.height);
-         for (int yy = 0; yy < mid.height; yy++) {
+         for (int yy = 0; yy < mid.height; ++yy) {
             if (int(yy2)>=half)
                yy2=half-1;
             if (yy2<0)
@@ -2267,30 +2292,30 @@ void TrackArtist::DrawClipSpectrum(WaveTrackCache &cache,
             {
                bool isSpectral = ((track->GetDisplay() == WaveTrack::SpectralSelectionDisplay) ||
                                   (track->GetDisplay() == WaveTrack::SpectralSelectionLogDisplay));
-               selected = ChooseColorSet( bin0, bin1, selBinLo, selBinCenter, selBinHi, x/DASH_LENGTH, isSpectral );
+               selected = ChooseColorSet( bin0, bin1, selBinLo, selBinCenter, selBinHi, xx/DASH_LENGTH, isSpectral );
             }
 
-            const float value = clip->mSpecPxCache->values[x * mid.height + yy];
+            const float value = clip->mSpecPxCache->values[xx * mid.height + yy];
             yy2 = yy2_base;
 
             unsigned char rv, gv, bv;
-            GetColorGradient(value, selected, mIsGrayscale, &rv, &gv, &bv);
+            GetColorGradient(value, selected, isGrayscale, &rv, &gv, &bv);
 
 #ifdef EXPERIMENTAL_FFT_Y_GRID
-            if (mFftYGrid && yGrid[yy]) {
+            if (fftYGrid && yGrid[yy]) {
                rv /= 1.1f;
                gv /= 1.1f;
                bv /= 1.1f;
             }
 #endif //EXPERIMENTAL_FFT_Y_GRID
 
-            int px = ((mid.height - 1 - yy) * mid.width + x) * 3;
+            int px = ((mid.height - 1 - yy) * mid.width + xx) * 3;
             data[px++] = rv;
             data[px++] = gv;
             data[px] = bv;
          } // each y
       } // logF
-   } // each x
+   } // each xx
 
    // If we get to this point, the clip is actually visible on the
    // screen, so remember the display rectangle.
@@ -2305,14 +2330,9 @@ void TrackArtist::DrawClipSpectrum(WaveTrackCache &cache,
    dc.Blit(mid.x, mid.y, mid.width, mid.height, &memDC, 0, 0, wxCOPY, FALSE);
 
    delete image;
-   delete[] where;
-   delete[] freq;
 #ifdef EXPERIMENTAL_FFT_Y_GRID
    delete[] yGrid;
 #endif //EXPERIMENTAL_FFT_Y_GRID
-#ifdef EXPERIMENTAL_FIND_NOTES
-   delete[] indexes;
-#endif //EXPERIMENTAL_FIND_NOTES
 }
 
 void TrackArtist::InvalidateSpectrumCache(TrackList *tracks)
@@ -3024,99 +3044,74 @@ void TrackArtist::UpdatePrefs()
    mdBrange = gPrefs->Read(wxT("/GUI/EnvdBRange"), mdBrange);
    mShowClipping = gPrefs->Read(wxT("/GUI/ShowClipping"), mShowClipping);
 
-   // mMaxFreq should have the same default as in SpectrumPrefs.
-   mMaxFreq = gPrefs->Read(wxT("/Spectrum/MaxFreq"), 8000L);
-   mMinFreq = gPrefs->Read(wxT("/Spectrum/MinFreq"), -1);
-   mLogMaxFreq = gPrefs->Read(wxT("/SpectrumLog/MaxFreq"), -1);
-   if( mLogMaxFreq < 0 )
-      mLogMaxFreq = mMaxFreq;
-   mLogMinFreq = gPrefs->Read(wxT("/SpectrumLog/MinFreq"), -1);
-   if( mLogMinFreq < 0 )
-      mLogMinFreq = mMinFreq;
-   if (mLogMinFreq < 1)
-      mLogMinFreq = 1;
-
-   mWindowSize = gPrefs->Read(wxT("/Spectrum/FFTSize"), 256);
-#ifdef EXPERIMENTAL_ZERO_PADDED_SPECTROGRAMS
-   mZeroPaddingFactor = gPrefs->Read(wxT("/Spectrum/ZeroPaddingFactor"), 1);
-#endif
-   mIsGrayscale = (gPrefs->Read(wxT("/Spectrum/Grayscale"), 0L) != 0);
-
-#ifdef EXPERIMENTAL_FFT_Y_GRID
-   mFftYGrid = (gPrefs->Read(wxT("/Spectrum/FFTYGrid"), 0L) != 0);
-#endif //EXPERIMENTAL_FFT_Y_GRID
-
-#ifdef EXPERIMENTAL_FIND_NOTES
-   mFftFindNotes = (gPrefs->Read(wxT("/Spectrum/FFTFindNotes"), 0L) != 0);
-   mFindNotesMinA = gPrefs->Read(wxT("/Spectrum/FindNotesMinA"), -30.0);
-   mNumberOfMaxima = gPrefs->Read(wxT("/Spectrum/FindNotesN"), 5L);
-   mFindNotesQuantize = (gPrefs->Read(wxT("/Spectrum/FindNotesQuantize"), 0L) != 0);
-#endif //EXPERIMENTAL_FIND_NOTES
-
-#ifdef EXPERIMENTAL_FFT_SKIP_POINTS
-   mFftSkipPoints = gPrefs->Read(wxT("/Spectrum/FFTSkipPoints"), 0L);
-#endif //EXPERIMENTAL_FFT_SKIP_POINTS
-
    gPrefs->Flush();
 }
 
 // Get various preference values
 int TrackArtist::GetSpectrumMinFreq(int deffreq)
 {
-   return mMinFreq < 0 ? deffreq : mMinFreq;
+   const int &minFreq = SpectrogramSettings::defaults().minFreq;
+   return minFreq < 0 ? deffreq : minFreq;
 }
 
 int TrackArtist::GetSpectrumMaxFreq(int deffreq)
 {
-   return mMaxFreq < 0 ? deffreq : mMaxFreq;
+   const int &maxFreq = SpectrogramSettings::defaults().maxFreq;
+   return maxFreq < 0 ? deffreq : maxFreq;
 }
 
 int TrackArtist::GetSpectrumLogMinFreq(int deffreq)
 {
-   return mLogMinFreq < 0 ? deffreq : mLogMinFreq;
+   const int &logMinFreq = SpectrogramSettings::defaults().logMinFreq;
+   return logMinFreq < 0 ? deffreq : logMinFreq;
 }
 
 int TrackArtist::GetSpectrumLogMaxFreq(int deffreq)
 {
-   return mLogMaxFreq < 0 ? deffreq : mLogMaxFreq;
+   const int &logMaxFreq = SpectrogramSettings::defaults().logMaxFreq;
+   return logMaxFreq < 0 ? deffreq : logMaxFreq;
 }
 
 int TrackArtist::GetSpectrumWindowSize(bool includeZeroPadding)
 {
+   includeZeroPadding;
+   const int &windowSize = SpectrogramSettings::defaults().windowSize;
 #ifdef EXPERIMENTAL_ZERO_PADDED_SPECTROGRAMS
-   if (includeZeroPadding)
-      return mWindowSize * mZeroPaddingFactor;
+   if (includeZeroPadding) {
+      const int &zeroPaddingFactor = SpectrogramSettings::defaults().zeroPaddingFactor;
+      return windowSize * zeroPaddingFactor;
+   }
    else
 #endif
-      return mWindowSize;
+      return windowSize;
 }
 
 #ifdef EXPERIMENTAL_FFT_SKIP_POINTS
 int TrackArtist::GetSpectrumFftSkipPoints()
 {
-   return mFftSkipPoints;
+   return SpectrogramSettings::defaults().fftSkipPoints;
 }
 #endif
 
 // Set various preference values
 void TrackArtist::SetSpectrumMinFreq(int freq)
 {
-   mMinFreq = freq;
+   SpectrogramSettings::defaults().minFreq = freq;
 }
 
 void TrackArtist::SetSpectrumMaxFreq(int freq)
 {
-   mMaxFreq = freq;
+   SpectrogramSettings::defaults().maxFreq = freq;
 }
 
 void TrackArtist::SetSpectrumLogMinFreq(int freq)
 {
-   mLogMinFreq = freq;
+   SpectrogramSettings::defaults().logMinFreq = freq;
 }
 
 void TrackArtist::SetSpectrumLogMaxFreq(int freq)
 {
-   mLogMaxFreq = freq;
+   SpectrogramSettings::defaults().logMaxFreq = freq;
 }
 
 // Draws the sync-lock bitmap, tiled; always draws stationary relative to the DC
