@@ -51,27 +51,27 @@ greater use in future.
 #include "nyquist/Nyquist.h"
 
 #if defined(__WXMAC__)
-#include <wx/mac/private.h>
+#include <Cocoa/Cocoa.h>
 #endif
 
-static const int kDummyID = 30000;
-static const int kSaveAsID = 30001;
-static const int kImportID = 30002;
-static const int kExportID = 30003;
-static const int kDefaultsID = 30004;
-static const int kOptionsID = 30005;
-static const int kUserPresetsDummyID = 30006;
-static const int kDeletePresetDummyID = 30007;
-static const int kMenuID = 30100;
-static const int kEnableID = 30101;
-static const int kPlayID = 30102;
-static const int kRewindID = 30103;
-static const int kFFwdID = 30104;
-static const int kPlaybackID = 30105;
-static const int kCaptureID = 30106;
-static const int kUserPresetsID = 31000;
-static const int kDeletePresetID = 32000;
-static const int kFactoryPresetsID = 33000;
+static const int kDummyID = 20000;
+static const int kSaveAsID = 20001;
+static const int kImportID = 20002;
+static const int kExportID = 20003;
+static const int kDefaultsID = 20004;
+static const int kOptionsID = 20005;
+static const int kUserPresetsDummyID = 20006;
+static const int kDeletePresetDummyID = 20007;
+static const int kMenuID = 20100;
+static const int kEnableID = 20101;
+static const int kPlayID = 20102;
+static const int kRewindID = 20103;
+static const int kFFwdID = 20104;
+static const int kPlaybackID = 20105;
+static const int kCaptureID = 20106;
+static const int kUserPresetsID = 21000;
+static const int kDeletePresetID = 22000;
+static const int kFactoryPresetsID = 23000;
 
 const wxString Effect::kUserPresetIdent = wxT("User Preset:");
 const wxString Effect::kFactoryPresetIdent = wxT("Factory Preset:");
@@ -2060,6 +2060,11 @@ TimeWarper *Effect::GetTimeWarper()
 // Use these two methods to copy the input tracks to mOutputTracks, if
 // doing the processing on them, and replacing the originals only on success (and not cancel).
 // Copy the group tracks that have tracks selected
+void Effect::CopyInputTracks()
+{
+   CopyInputTracks(Track::Wave);
+}
+
 void Effect::CopyInputTracks(int trackType)
 {
    // Reset map
@@ -2765,6 +2770,11 @@ EffectUIHost::EffectUIHost(wxWindow *parent,
             wxDefaultPosition, wxDefaultSize,
             wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER | wxMINIMIZE_BOX | wxMAXIMIZE_BOX)
 {
+#if defined(__WXMAC__)
+   // Make sure the effect window actually floats above the main window
+   [[((NSView *)GetHandle()) window] setLevel:NSFloatingWindowLevel];
+#endif
+
    SetName(effect->GetName());
    SetExtraStyle(wxWS_EX_VALIDATE_RECURSIVELY);
 
@@ -2816,6 +2826,7 @@ bool EffectUIHost::Show(bool show)
 {
    if (!mIsModal)
    {
+#if !wxCHECK_VERSION(3, 0, 0)
       // We want the effects windows on the Mac to float above the project window
       // but still have normal modal dialogs appear above the effects windows and
       // not let the effect windows fall behind the project window.
@@ -2825,6 +2836,7 @@ bool EffectUIHost::Show(bool show)
       WindowGroupRef parentGroup = GetWindowGroup((WindowRef) ((wxFrame *)wxGetTopLevelParent(mParent))->MacGetWindowRef());
       ChangeWindowGroupAttributes(parentGroup, kWindowGroupAttrSharedActivation, kWindowGroupAttrMoveTogether);
       SetWindowGroup(windowRef, parentGroup);
+#endif
    }
    mIsModal = false;
 
@@ -3057,6 +3069,7 @@ bool EffectUIHost::Initialize()
 
    InitializeRealtime();
 
+   SetMinSize(GetSize());
    return true;
 }
 

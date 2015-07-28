@@ -14,7 +14,6 @@
 
 #include "../AudacityApp.h"
 
-#include "../Envelope.h"
 #include "../FFT.h"
 #include "../WaveTrack.h"
 #include "../Prefs.h"
@@ -112,7 +111,7 @@ float ContrastDialog::GetDB()
    {
       if( rms < 1.0E-30 )
          return -60.0;
-      return 20.0*log10(rms);
+      return LINEAR_TO_DB(rms);
    }
    else
    {
@@ -465,7 +464,12 @@ void ContrastDialog::OnExport(wxCommandEvent & WXUNUSED(event))
    wxString fName = wxT("contrast.txt");
 
    fName = FileSelector(_("Export Contrast Result As:"),
-                        wxEmptyString, fName, wxT("txt"), wxT("*.txt"), wxFD_SAVE | wxRESIZE_BORDER, this);
+                        wxEmptyString,
+                        fName,
+                        wxT("txt"),
+                        wxT("*.txt"),
+                        wxFD_SAVE | wxRESIZE_BORDER,
+                        this);
 
    if (fName == wxT(""))
       return;

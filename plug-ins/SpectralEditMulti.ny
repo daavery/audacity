@@ -45,4 +45,5 @@
       (T  (sum (prod env (wet sig f0 f1 fc))
                (prod (diff 1.0 env) sig))))))
 
-(catch 'error-message (multichan-expand #'result *track*))
+(catch 'error-message
+  (multichan-expand #'result *track*))
